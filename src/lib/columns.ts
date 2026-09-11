@@ -31,12 +31,14 @@ export const ETUDIANTS_HEADERS = [
   ...STUDENT_COLUMNS,
 ] as const;
 
-/** Feuille Confirmations — slim, classée comme l'app (par filière / score) */
+/** Feuille Confirmations — slim + qui / quand */
 export const CONFIRMATIONS_HEADERS = [
   "CNE",
   "NomComplet",
   "Filiere",
   "Score",
+  "Agent",
+  "DateConfirmation",
 ] as const;
 
 export type StudentRow = Record<string, string>;

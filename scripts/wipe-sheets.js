@@ -37,7 +37,14 @@ const FILIERES = [
 ];
 
 const HEADERS = {
-  Confirmations: ["CNE", "NomComplet", "Filiere", "Score"],
+  Confirmations: [
+    "CNE",
+    "NomComplet",
+    "Filiere",
+    "Score",
+    "Agent",
+    "DateConfirmation",
+  ],
   Agents: ["Nom", "MotDePasse"],
   Etudiants: [
     "FiliereCode",

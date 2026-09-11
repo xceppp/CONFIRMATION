@@ -252,7 +252,14 @@ function normalizeConfirmationRow(row: StudentRow): StudentRow {
 
 function confirmationToSheetLine(row: StudentRow): string[] {
   const n = normalizeConfirmationRow(row);
-  return [n.CNE, n.NomComplet, n.Filiere, n.Score];
+  return [
+    n.CNE,
+    n.NomComplet,
+    n.Filiere,
+    n.Score,
+    n.Agent || "",
+    n.DateConfirmation || "",
+  ];
 }
 
 async function rewriteConfirmationsSheet(rows: StudentRow[]): Promise<void> {
@@ -609,7 +616,9 @@ export async function refreshConfirmations(): Promise<void> {
 function alreadyConfirmedMessage(row: StudentRow): string {
   const n = normalizeConfirmationRow(row);
   const filiere = n.Filiere || "?";
-  return `Cet étudiant a déjà confirmé la filière « ${filiere} ». Une seule confirmation est autorisée.`;
+  const agent = n.Agent ? ` par l'agent « ${n.Agent} »` : "";
+  const when = n.DateConfirmation ? ` (${n.DateConfirmation})` : "";
+  return `Cet étudiant a déjà confirmé la filière « ${filiere} »${agent}${when}. Une seule confirmation est autorisée.`;
 }
 
 export async function getEtudiantsByCode(code: string): Promise<StudentRow[]> {
@@ -665,6 +674,9 @@ export async function appendConfirmation(
       FiliereCode: student.FiliereCode || "",
       Score: student.Score || "",
       Agent: agent,
+      DateConfirmation: new Date().toLocaleString("fr-FR", {
+        timeZone: "Africa/Casablanca",
+      }),
     });
 
     const nextList = [...c.confirmationList, saved];

@@ -228,14 +228,16 @@ export default function AdminConfirmationsPage() {
                 </span>
               </div>
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[640px] text-left text-sm">
+                <table className="w-full min-w-[800px] text-left text-sm">
                   <thead>
                     <tr className="border-b border-[var(--line)] text-[var(--muted)]">
                       <th className="py-2 pr-3 font-medium">#</th>
                       <th className="py-2 pr-3 font-medium">Score</th>
                       <th className="py-2 pr-3 font-medium">CNE</th>
                       <th className="py-2 pr-3 font-medium">Nom complet</th>
-                      <th className="py-2 font-medium">Filière</th>
+                      <th className="py-2 pr-3 font-medium">Filière</th>
+                      <th className="py-2 pr-3 font-medium">Agent</th>
+                      <th className="py-2 font-medium">Date</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -258,7 +260,13 @@ export default function AdminConfirmationsPage() {
                             `${r.PrenomFr || ""} ${r.NomFr || ""}`.trim() ||
                             "—"}
                         </td>
-                        <td className="py-2">{r.Filiere || "—"}</td>
+                        <td className="py-2 pr-3">{r.Filiere || "—"}</td>
+                        <td className="py-2 pr-3 font-medium">
+                          {r.Agent || "—"}
+                        </td>
+                        <td className="py-2 text-[var(--muted)]">
+                          {r.DateConfirmation || "—"}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

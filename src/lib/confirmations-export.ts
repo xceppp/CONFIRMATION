@@ -13,9 +13,18 @@ export const EXPORT_COLUMNS: ExportColumn[] = [
   { key: "NomComplet", label: "Nom complet" },
   { key: "Filiere", label: "Filière confirmée" },
   { key: "Score", label: "Score" },
+  { key: "Agent", label: "Agent" },
+  { key: "DateConfirmation", label: "Date confirmation" },
 ];
 
-export const DEFAULT_EXPORT_KEYS = ["CNE", "NomComplet", "Filiere", "Score"];
+export const DEFAULT_EXPORT_KEYS = [
+  "CNE",
+  "NomComplet",
+  "Filiere",
+  "Score",
+  "Agent",
+  "DateConfirmation",
+];
 
 function parseScore(row: StudentRow): number {
   const raw = String(row.Score || "")
