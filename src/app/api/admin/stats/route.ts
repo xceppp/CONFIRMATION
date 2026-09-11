@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
-import { isAuthenticated } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { getStats, listConfirmations } from "@/lib/sheets";
 
 export async function GET() {
-  if (!(await isAuthenticated())) {
-    return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
+  if (!(await requireAdmin())) {
+    return NextResponse.json({ error: "Accès admin refusé" }, { status: 403 });
   }
 
   try {

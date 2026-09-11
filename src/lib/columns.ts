@@ -31,10 +31,19 @@ export const ETUDIANTS_HEADERS = [
   ...STUDENT_COLUMNS,
 ] as const;
 
-/** En-têtes de la feuille Confirmations = ligne complète + date */
+/** En-têtes de la feuille Confirmations = ligne complète + date + agent */
 export const CONFIRMATIONS_HEADERS = [
   ...ETUDIANTS_HEADERS,
   "DateConfirmation",
+  "Agent",
 ] as const;
 
 export type StudentRow = Record<string, string>;
+
+/** Feuille Agents — comptes créés par l'admin */
+export const AGENTS_HEADERS = ["Nom", "MotDePasse"] as const;
+
+export type AgentRow = {
+  Nom: string;
+  MotDePasse: string;
+};

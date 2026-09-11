@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { isAuthenticated } from "@/lib/auth";
+import { getSession } from "@/lib/auth";
 import {
   appendConfirmation,
   getEtudiantsByCode,
@@ -8,9 +8,15 @@ import {
 import type { StudentRow } from "@/lib/columns";
 
 export async function POST(request: Request) {
-  if (!(await isAuthenticated())) {
+  const session = await getSession();
+  if (!session) {
     return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
   }
+
+  const agentName =
+    session.role === "agent"
+      ? session.name
+      : session.name || "Admin";
 
   const body = await request.json().catch(() => null);
   const code = String(body?.code || "").trim();
@@ -24,7 +30,11 @@ export async function POST(request: Request) {
   }
 
   try {
-    const existing = await isAlreadyConfirmed(code);
+    const [existing, rows] = await Promise.all([
+      isAlreadyConfirmed(code),
+      getEtudiantsByCode(code),
+    ]);
+
     if (existing) {
       return NextResponse.json(
         {
@@ -35,7 +45,6 @@ export async function POST(request: Request) {
       );
     }
 
-    const rows = await getEtudiantsByCode(code);
     const match = rows.find(
       (r) =>
         String(r.FiliereCode || "").toUpperCase() === filiereCode.toUpperCase(),
@@ -49,15 +58,20 @@ export async function POST(request: Request) {
     }
 
     const payload: StudentRow = { ...match };
-    await appendConfirmation(payload);
+    await appendConfirmation(payload, agentName);
 
     return NextResponse.json({
       ok: true,
       message: "Confirmation enregistrée.",
       filiere: match.Filiere,
+      agent: agentName,
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Erreur serveur";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const status =
+      message.includes("déjà confirmé") || message.includes("déjà en cours")
+        ? 409
+        : 500;
+    return NextResponse.json({ error: message }, { status });
   }
 }

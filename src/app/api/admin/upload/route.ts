@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import Papa from "papaparse";
-import { isAuthenticated } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { STUDENT_COLUMNS, type StudentRow } from "@/lib/columns";
 import { getFiliereByCode } from "@/lib/filieres";
 import { appendEtudiants } from "@/lib/sheets";
@@ -9,8 +9,8 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 export async function POST(request: Request) {
-  if (!(await isAuthenticated())) {
-    return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
+  if (!(await requireAdmin())) {
+    return NextResponse.json({ error: "Accès admin refusé" }, { status: 403 });
   }
 
   try {
@@ -70,12 +70,13 @@ export async function POST(request: Request) {
       );
     }
 
-    const count = await appendEtudiants(rows);
+    const count = await appendEtudiants(filiere.code, rows);
     return NextResponse.json({
       ok: true,
       imported: count,
       filiere: filiere.name,
-      message: `${count} étudiants importés pour ${filiere.code}.`,
+      sheet: filiere.code,
+      message: `${count} étudiants importés dans la feuille « ${filiere.code} ».`,
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Erreur serveur";

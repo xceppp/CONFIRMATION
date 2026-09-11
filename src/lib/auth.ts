@@ -1,7 +1,13 @@
 import { cookies } from "next/headers";
 import { createHmac, timingSafeEqual } from "crypto";
+import {
+  COOKIE_NAME,
+  type Session,
+  type SessionRole,
+} from "./session-types";
 
-const COOKIE_NAME = "confirmation_session";
+export { COOKIE_NAME, type Session, type SessionRole };
+
 const MAX_AGE_SECONDS = 60 * 60 * 12; // 12 heures
 
 function getSecret(): string {
@@ -12,24 +18,76 @@ function sign(value: string): string {
   return createHmac("sha256", getSecret()).update(value).digest("hex");
 }
 
-export function verifyPassword(password: string): boolean {
-  const expected = process.env.APP_PASSWORD || "";
-  if (!expected) return false;
+function safeEqual(a: string, b: string): boolean {
   try {
-    const a = Buffer.from(password);
-    const b = Buffer.from(expected);
-    if (a.length !== b.length) return false;
-    return timingSafeEqual(a, b);
+    const ba = Buffer.from(a);
+    const bb = Buffer.from(b);
+    if (ba.length !== bb.length) return false;
+    return timingSafeEqual(ba, bb);
   } catch {
     return false;
   }
 }
 
-export async function createSessionCookie(): Promise<void> {
-  const token = `ok.${Date.now()}`;
-  const signature = sign(token);
+export function verifyAdminPassword(password: string): boolean {
+  const expected = process.env.APP_PASSWORD || "";
+  if (!expected) return false;
+  return safeEqual(password, expected);
+}
+
+function encodePayload(session: Omit<Session, "ts"> & { ts?: number }): string {
+  const body = {
+    role: session.role,
+    name: session.name || "",
+    ts: session.ts ?? Date.now(),
+  };
+  return Buffer.from(JSON.stringify(body), "utf8").toString("base64url");
+}
+
+function decodePayload(raw: string): Session | null {
+  try {
+    const json = Buffer.from(raw, "base64url").toString("utf8");
+    const data = JSON.parse(json) as Session;
+    if (data.role !== "admin" && data.role !== "agent") return null;
+    if (typeof data.ts !== "number") return null;
+    if (data.role === "agent" && !data.name) return null;
+    return {
+      role: data.role,
+      name: String(data.name || ""),
+      ts: data.ts,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function parseSessionCookie(
+  raw: string | undefined | null,
+): Session | null {
+  if (!raw) return null;
+  const dot = raw.lastIndexOf(".");
+  if (dot <= 0) return null;
+  const payload = raw.slice(0, dot);
+  const signature = raw.slice(dot + 1);
+  if (!safeEqual(signature, sign(payload))) return null;
+
+  const session = decodePayload(payload);
+  if (!session) return null;
+  const age = Date.now() - session.ts;
+  if (!Number.isFinite(age) || age >= MAX_AGE_SECONDS * 1000) return null;
+  return session;
+}
+
+export async function createSessionCookie(session: {
+  role: SessionRole;
+  name?: string;
+}): Promise<void> {
+  const payload = encodePayload({
+    role: session.role,
+    name: session.name || "",
+  });
   const jar = await cookies();
-  jar.set(COOKIE_NAME, `${token}.${signature}`, {
+  jar.set(COOKIE_NAME, `${payload}.${sign(payload)}`, {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
@@ -43,23 +101,23 @@ export async function clearSessionCookie(): Promise<void> {
   jar.delete(COOKIE_NAME);
 }
 
-export async function isAuthenticated(): Promise<boolean> {
+export async function getSession(): Promise<Session | null> {
   const jar = await cookies();
-  const raw = jar.get(COOKIE_NAME)?.value;
-  if (!raw) return false;
-  const parts = raw.split(".");
-  if (parts.length !== 3) return false;
-  const [flag, ts, signature] = parts;
-  const token = `${flag}.${ts}`;
-  const expected = sign(token);
-  try {
-    const a = Buffer.from(signature);
-    const b = Buffer.from(expected);
-    if (a.length !== b.length) return false;
-    if (!timingSafeEqual(a, b)) return false;
-  } catch {
-    return false;
-  }
-  const age = Date.now() - Number(ts);
-  return Number.isFinite(age) && age < MAX_AGE_SECONDS * 1000;
+  return parseSessionCookie(jar.get(COOKIE_NAME)?.value);
+}
+
+export async function isAuthenticated(): Promise<boolean> {
+  return Boolean(await getSession());
+}
+
+export async function requireAdmin(): Promise<Session | null> {
+  const session = await getSession();
+  if (!session || session.role !== "admin") return null;
+  return session;
+}
+
+export async function requireAgent(): Promise<Session | null> {
+  const session = await getSession();
+  if (!session || session.role !== "agent") return null;
+  return session;
 }
