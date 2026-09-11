@@ -37,7 +37,10 @@ let sheetIdCached: string | null = null;
 let cache: SheetCache | null = null;
 let warmPromise: Promise<SheetCache> | null = null;
 let confReloadPromise: Promise<void> | null = null;
+let studentsReloadPromise: Promise<void> | null = null;
+let studentsFetchedAt = 0;
 const confirmingCodes = new Set<string>();
+const STUDENTS_TTL_MS = 10_000;
 
 function getAuth() {
   const email = process.env.GOOGLE_CLIENT_EMAIL;
@@ -432,6 +435,116 @@ export async function invalidateCache(): Promise<void> {
   cache = null;
   warmPromise = null;
   confReloadPromise = null;
+  studentsReloadPromise = null;
+  studentsFetchedAt = 0;
+}
+
+async function loadEtudiantsPartsFromSheets(): Promise<{
+  etud: Pick<SheetCache, "etudiantsByCode" | "etudiantCount" | "parFiliere">;
+  filiereSheets: string[];
+  agents: Pick<SheetCache, "agentsByName" | "agentsList">;
+}> {
+  await ensureWorkbookReady();
+  const { sheets, sheetId } = getSheets();
+  const titles = await listSheetTitles();
+  const filiereTitles = titles.filter(isFiliereSheetTitle);
+  const hasLegacy = titles.includes(LEGACY_ETUDIANTS);
+
+  const ranges = [
+    ...filiereTitles.map((t) => `${t}!A:Z`),
+    ...(hasLegacy ? [`${LEGACY_ETUDIANTS}!A:Z`] : []),
+    `${SHEET_AGENTS}!A:Z`,
+  ];
+
+  if (ranges.length === 1) {
+    // Only Agents — no filière tabs yet
+    const agentsRes = await sheets.spreadsheets.values.get({
+      spreadsheetId: sheetId,
+      range: `${SHEET_AGENTS}!A:Z`,
+    });
+    return {
+      etud: {
+        etudiantsByCode: new Map(),
+        etudiantCount: 0,
+        parFiliere: {},
+      },
+      filiereSheets: [],
+      agents: buildAgentsIndex(
+        (agentsRes.data.values || []).map((r) => r.map(String)),
+      ),
+    };
+  }
+
+  const batch = await sheets.spreadsheets.values.batchGet({
+    spreadsheetId: sheetId,
+    ranges,
+  });
+  const valueRanges = batch.data.valueRanges || [];
+  const etudParts: Pick<
+    SheetCache,
+    "etudiantsByCode" | "etudiantCount" | "parFiliere"
+  >[] = [];
+
+  let idx = 0;
+  for (const title of filiereTitles) {
+    const values = (valueRanges[idx++]?.values || []).map((r) =>
+      r.map(String),
+    );
+    const filiere = getFiliereByCode(title)!;
+    etudParts.push(
+      buildEtudiantsIndex(values, { code: filiere.code, name: filiere.name }),
+    );
+  }
+  if (hasLegacy) {
+    const values = (valueRanges[idx++]?.values || []).map((r) =>
+      r.map(String),
+    );
+    etudParts.push(buildEtudiantsIndex(values));
+  }
+  const agentsValues = (valueRanges[idx++]?.values || []).map((r) =>
+    r.map(String),
+  );
+
+  return {
+    etud: mergeEtudiantParts(etudParts),
+    filiereSheets: filiereTitles.sort(),
+    agents: buildAgentsIndex(agentsValues),
+  };
+}
+
+/**
+ * Reload filière student tabs (+ agents) from Google into RAM.
+ * Fixes admin showing 0 after import on another Vercel instance.
+ */
+export async function refreshStudents(options?: {
+  force?: boolean;
+}): Promise<void> {
+  const force = Boolean(options?.force);
+  if (
+    !force &&
+    cache &&
+    cache.etudiantCount > 0 &&
+    Date.now() - studentsFetchedAt < STUDENTS_TTL_MS
+  ) {
+    return;
+  }
+
+  if (!studentsReloadPromise) {
+    studentsReloadPromise = (async () => {
+      const loaded = await loadEtudiantsPartsFromSheets();
+      const c = await getCache();
+      c.etudiantsByCode = loaded.etud.etudiantsByCode;
+      c.etudiantCount = loaded.etud.etudiantCount;
+      c.parFiliere = loaded.etud.parFiliere;
+      c.filiereSheets = loaded.filiereSheets;
+      c.agentsByName = loaded.agents.agentsByName;
+      c.agentsList = loaded.agents.agentsList;
+      studentsFetchedAt = Date.now();
+    })().finally(() => {
+      studentsReloadPromise = null;
+    });
+  }
+  await studentsReloadPromise;
 }
 
 async function fetchConfirmationsIndex(): Promise<
@@ -501,7 +614,14 @@ function alreadyConfirmedMessage(row: StudentRow): string {
 
 export async function getEtudiantsByCode(code: string): Promise<StudentRow[]> {
   const c = await getCache();
-  return c.etudiantsByCode.get(normCode(code)) ?? [];
+  // Empty cache after wipe/import on another instance → pull from Sheets.
+  if (c.etudiantCount === 0) {
+    await refreshStudents({ force: true });
+  } else {
+    await refreshStudents();
+  }
+  const latest = await getCache();
+  return latest.etudiantsByCode.get(normCode(code)) ?? [];
 }
 
 /** Always checks the live Confirmations sheet (not stale RAM alone). */
@@ -605,7 +725,10 @@ export async function appendEtudiants(
     c.parFiliere[fc] = (c.parFiliere[fc] || 0) + 1;
     c.etudiantCount += 1;
   }
+  studentsFetchedAt = Date.now();
 
+  // Force other code paths / next stats read to re-sync from Sheets.
+  // (Same instance already updated above.)
   return rows.length;
 }
 
@@ -613,14 +736,16 @@ export async function getStats(): Promise<{
   etudiants: number;
   confirmations: number;
   parFiliere: Record<string, number>;
+  filiereSheets: string[];
 }> {
-  const c = await getCache();
+  await refreshStudents({ force: true });
   await refreshConfirmations();
   const latest = await getCache();
   return {
-    etudiants: c.etudiantCount,
+    etudiants: latest.etudiantCount,
     confirmations: latest.confirmationCount,
-    parFiliere: { ...c.parFiliere },
+    parFiliere: { ...latest.parFiliere },
+    filiereSheets: [...latest.filiereSheets],
   };
 }
 

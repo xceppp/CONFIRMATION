@@ -7,6 +7,7 @@ type Stats = {
   etudiants: number;
   confirmations: number;
   parFiliere: Record<string, number>;
+  filiereSheets?: string[];
 };
 
 export default function AdminHomePage() {
@@ -64,7 +65,8 @@ export default function AdminHomePage() {
           <p className="text-3xl font-semibold">
             {loading
               ? "…"
-              : Object.keys(stats?.parFiliere || {}).length}
+              : (stats?.filiereSheets?.length ??
+                Object.keys(stats?.parFiliere || {}).length)}
           </p>
         </div>
       </section>

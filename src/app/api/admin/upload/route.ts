@@ -34,11 +34,19 @@ export async function POST(request: Request) {
     }
 
     const text = await file.text();
-    const parsed = Papa.parse<Record<string, string>>(text, {
+    // Massar exports use `;` — also accept `,` if needed.
+    let parsed = Papa.parse<Record<string, string>>(text, {
       header: true,
       delimiter: ";",
       skipEmptyLines: true,
     });
+    if (parsed.data.length === 0 || Object.keys(parsed.data[0] || {}).length < 2) {
+      parsed = Papa.parse<Record<string, string>>(text, {
+        header: true,
+        delimiter: ",",
+        skipEmptyLines: true,
+      });
+    }
 
     if (parsed.errors.length > 0 && parsed.data.length === 0) {
       return NextResponse.json(
@@ -49,7 +57,9 @@ export async function POST(request: Request) {
 
     const rows: StudentRow[] = [];
     for (const raw of parsed.data) {
-      const code = String(raw.Code || "").trim();
+      const code = String(
+        raw.Code || raw.CNE || raw.code || raw.cne || "",
+      ).trim();
       if (!code) continue;
 
       const row: StudentRow = {
@@ -60,6 +70,7 @@ export async function POST(request: Request) {
       for (const col of STUDENT_COLUMNS) {
         row[col] = String(raw[col] ?? "").trim();
       }
+      row.Code = code;
       rows.push(row);
     }
 

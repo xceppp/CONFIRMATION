@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { isAuthenticated } from "@/lib/auth";
-import { getCache } from "@/lib/sheets";
+import {
+  getCache,
+  refreshConfirmations,
+  refreshStudents,
+} from "@/lib/sheets";
 
 /** Prefetch Sheets into RAM so searches stay instant. */
 export async function POST() {
@@ -9,12 +13,15 @@ export async function POST() {
   }
 
   try {
+    await refreshStudents({ force: true });
+    await refreshConfirmations();
     const c = await getCache();
     return NextResponse.json({
       ok: true,
       etudiants: c.etudiantCount,
       confirmations: c.confirmationCount,
       agents: c.agentsList.length,
+      filiereSheets: c.filiereSheets,
       codesIndexes: c.etudiantsByCode.size,
     });
   } catch (e) {
