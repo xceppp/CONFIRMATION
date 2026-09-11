@@ -215,18 +215,32 @@ function buildConfirmationsIndex(values: string[][]): Pick<
     body.map((r) => r.map(String)),
   ).map(normalizeConfirmationRow);
 
+  const uniqueList: StudentRow[] = [];
   for (const row of objects) {
     const code = normCode(row.CNE || row.Code || "");
     if (!code || confirmationsByCode.has(code)) continue;
+    // First row for a CNE wins (blocks double confirm across agents).
     confirmationsByCode.set(code, row);
+    uniqueList.push(row);
   }
 
-  // List already sorted like the app when rewritten; keep sheet order here.
   return {
     confirmationsByCode,
-    confirmationCount: objects.length,
-    confirmationList: objects,
+    confirmationCount: uniqueList.length,
+    confirmationList: uniqueList,
   };
+}
+
+function dedupeConfirmationsByCne(rows: StudentRow[]): StudentRow[] {
+  const seen = new Set<string>();
+  const out: StudentRow[] = [];
+  for (const row of rows.map(normalizeConfirmationRow)) {
+    const code = normCode(row.CNE || row.Code || "");
+    if (!code || seen.has(code)) continue;
+    seen.add(code);
+    out.push(row);
+  }
+  return out;
 }
 
 /** Normalize legacy wide rows + new slim CNE sheet into one shape. */
@@ -657,8 +671,9 @@ export async function appendConfirmation(
   confirmingCodes.add(needle);
 
   try {
+    // 1) Live check — reject if already confirmed.
     await refreshConfirmations();
-    const c = await getCache();
+    let c = await getCache();
     const existing = c.confirmationsByCode.get(needle);
     if (existing) {
       throw new Error(alreadyConfirmedMessage(existing));
@@ -679,13 +694,44 @@ export async function appendConfirmation(
       }),
     });
 
-    const nextList = [...c.confirmationList, saved];
-    // Rewrite whole Confirmations tab: slim columns, grouped by filière, score ↓
-    await rewriteConfirmationsSheet(nextList);
+    // 2) Append only (does not wipe other agents' rows if they write at the same time).
+    await ensureWorkbookReady();
+    const { sheets, sheetId } = getSheets();
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: sheetId,
+      range: `${SHEET_CONFIRMATIONS}!A1`,
+      valueInputOption: "RAW",
+      insertDataOption: "INSERT_ROWS",
+      requestBody: { values: [confirmationToSheetLine(saved)] },
+    });
 
-    c.confirmationsByCode.set(needle, saved);
-    c.confirmationCount = nextList.length;
-    c.confirmationList = sortConfirmationsByFiliereThenScore(nextList);
+    // 3) Re-read Sheet — if two agents raced, first CNE row wins.
+    confReloadPromise = null;
+    await refreshConfirmations();
+    c = await getCache();
+    const winner = c.confirmationsByCode.get(needle);
+    if (!winner) {
+      throw new Error("Confirmation non enregistrée. Réessayez.");
+    }
+    if (winner.Agent && winner.Agent !== agent) {
+      // Someone else confirmed first — clean duplicates then block this agent.
+      const cleaned = dedupeConfirmationsByCne(c.confirmationList);
+      await rewriteConfirmationsSheet(cleaned);
+      c.confirmationList = sortConfirmationsByFiliereThenScore(cleaned);
+      c.confirmationCount = cleaned.length;
+      throw new Error(alreadyConfirmedMessage(winner));
+    }
+
+    // 4) Rewrite sorted + deduped (one row per CNE, grouped by filière).
+    const cleaned = dedupeConfirmationsByCne(c.confirmationList);
+    // Ensure our row is present (in case index kept an older empty Agent).
+    if (!cleaned.some((r) => normCode(r.CNE) === needle)) {
+      cleaned.push(saved);
+    }
+    await rewriteConfirmationsSheet(cleaned);
+    c.confirmationsByCode.set(needle, winner.Agent ? winner : saved);
+    c.confirmationList = sortConfirmationsByFiliereThenScore(cleaned);
+    c.confirmationCount = cleaned.length;
   } finally {
     confirmingCodes.delete(needle);
   }
