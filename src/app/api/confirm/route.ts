@@ -14,9 +14,7 @@ export async function POST(request: Request) {
   }
 
   const agentName =
-    session.role === "agent"
-      ? session.name
-      : session.name || "Admin";
+    session.role === "agent" ? session.name : session.name || "Admin";
 
   const body = await request.json().catch(() => null);
   const code = String(body?.code || "").trim();
@@ -36,9 +34,12 @@ export async function POST(request: Request) {
     ]);
 
     if (existing) {
+      const filiere = existing.Filiere || existing.FiliereCode || "?";
+      const agent = existing.Agent || "?";
       return NextResponse.json(
         {
-          error: "Cet étudiant a déjà confirmé une filière.",
+          error: `Cet étudiant a déjà confirmé la filière « ${filiere} » par l'agent « ${agent} ».`,
+          alreadyConfirmed: true,
           confirmation: existing,
         },
         { status: 409 },
@@ -64,14 +65,23 @@ export async function POST(request: Request) {
       ok: true,
       message: "Confirmation enregistrée.",
       filiere: match.Filiere,
+      filiereCode: match.FiliereCode,
       agent: agentName,
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Erreur serveur";
-    const status =
-      message.includes("déjà confirmé") || message.includes("déjà en cours")
-        ? 409
-        : 500;
-    return NextResponse.json({ error: message }, { status });
+    const already = message.includes("déjà confirmé");
+    if (already) {
+      const confirmed = await isAlreadyConfirmed(code).catch(() => null);
+      return NextResponse.json(
+        {
+          error: message,
+          alreadyConfirmed: true,
+          confirmation: confirmed,
+        },
+        { status: 409 },
+      );
+    }
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

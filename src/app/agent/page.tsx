@@ -116,10 +116,24 @@ export default function AgentPage() {
       });
       const data = await res.json();
       if (!res.ok) {
+        if (data.alreadyConfirmed && data.confirmation) {
+          setResult({
+            found: true,
+            alreadyConfirmed: true,
+            confirmation: data.confirmation,
+            student: result.student,
+            filieres: result.filieres,
+          });
+          setError("");
+          setSelected("");
+          return;
+        }
         setError(data.error || "Confirmation impossible");
         return;
       }
-      setSuccess(`Confirmé : ${data.filiere}`);
+      setSuccess(
+        `Confirmé : ${data.filiere}${data.agent ? ` (par ${data.agent})` : ""}`,
+      );
       setResult(null);
       setSelected("");
       setCode("");
@@ -233,19 +247,36 @@ export default function AgentPage() {
 
           {result.alreadyConfirmed ? (
             <div className="rounded-2xl border border-amber-200 bg-[var(--warn-bg)] p-5">
-              <p className="font-semibold text-amber-900">Déjà confirmé</p>
-              <p className="mt-1 text-amber-900/80">
-                Filière :{" "}
-                <strong>
-                  {result.confirmation?.Filiere ||
-                    result.confirmation?.FiliereCode}
-                </strong>
-                {result.confirmation?.Agent
-                  ? ` — par ${result.confirmation.Agent}`
-                  : null}
-                {result.confirmation?.DateConfirmation
-                  ? ` — ${result.confirmation.DateConfirmation}`
-                  : null}
+              <p className="font-semibold text-amber-900">
+                Étudiant déjà confirmé — une seule filière autorisée
+              </p>
+              <dl className="mt-3 space-y-2 text-sm text-amber-950">
+                <div>
+                  <dt className="text-amber-900/70">Filière confirmée</dt>
+                  <dd className="text-lg font-semibold">
+                    {result.confirmation?.FiliereCode
+                      ? `${result.confirmation.FiliereCode} — `
+                      : ""}
+                    {result.confirmation?.Filiere || "—"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-amber-900/70">Confirmé par l&apos;agent</dt>
+                  <dd className="text-lg font-semibold">
+                    {result.confirmation?.Agent || "—"}
+                  </dd>
+                </div>
+                {result.confirmation?.DateConfirmation ? (
+                  <div>
+                    <dt className="text-amber-900/70">Date</dt>
+                    <dd className="font-medium">
+                      {result.confirmation.DateConfirmation}
+                    </dd>
+                  </div>
+                ) : null}
+              </dl>
+              <p className="mt-3 text-sm text-amber-900/80">
+                Impossible de confirmer une autre filière pour ce code Massar.
               </p>
             </div>
           ) : (

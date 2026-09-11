@@ -35,6 +35,7 @@ let sheetsClient: ReturnType<typeof google.sheets> | null = null;
 let sheetIdCached: string | null = null;
 let cache: SheetCache | null = null;
 let warmPromise: Promise<SheetCache> | null = null;
+let confReloadPromise: Promise<void> | null = null;
 const confirmingCodes = new Set<string>();
 
 function getAuth() {
@@ -380,6 +381,52 @@ export async function getCache(): Promise<SheetCache> {
 export async function invalidateCache(): Promise<void> {
   cache = null;
   warmPromise = null;
+  confReloadPromise = null;
+}
+
+async function fetchConfirmationsIndex(): Promise<
+  Pick<
+    SheetCache,
+    "confirmationsByCode" | "confirmationCount" | "confirmationList"
+  >
+> {
+  await ensureWorkbookReady();
+  const { sheets, sheetId } = getSheets();
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: sheetId,
+    range: `${SHEET_CONFIRMATIONS}!A:Z`,
+  });
+  return buildConfirmationsIndex(
+    (res.data.values || []).map((r) => r.map(String)),
+  );
+}
+
+/**
+ * Reload Confirmations from Google Sheets into RAM.
+ * Critical on Vercel: each serverless instance has its own memory —
+ * Sheet is the shared source of truth across agents/admin.
+ */
+export async function refreshConfirmations(): Promise<void> {
+  if (!confReloadPromise) {
+    confReloadPromise = (async () => {
+      const conf = await fetchConfirmationsIndex();
+      // Ensure base cache exists (étudiants/agents), then patch confirmations.
+      const c = await getCache();
+      c.confirmationsByCode = conf.confirmationsByCode;
+      c.confirmationCount = conf.confirmationCount;
+      c.confirmationList = conf.confirmationList;
+    })().finally(() => {
+      confReloadPromise = null;
+    });
+  }
+  await confReloadPromise;
+}
+
+function alreadyConfirmedMessage(row: StudentRow): string {
+  const filiere = row.Filiere || row.FiliereCode || "?";
+  const agent = row.Agent ? ` par l'agent « ${row.Agent} »` : "";
+  const when = row.DateConfirmation ? ` (${row.DateConfirmation})` : "";
+  return `Cet étudiant a déjà confirmé la filière « ${filiere} »${agent}${when}.`;
 }
 
 export async function getEtudiantsByCode(code: string): Promise<StudentRow[]> {
@@ -387,9 +434,11 @@ export async function getEtudiantsByCode(code: string): Promise<StudentRow[]> {
   return c.etudiantsByCode.get(normCode(code)) ?? [];
 }
 
+/** Always checks the live Confirmations sheet (not stale RAM alone). */
 export async function isAlreadyConfirmed(
   code: string,
 ): Promise<StudentRow | null> {
+  await refreshConfirmations();
   const c = await getCache();
   return c.confirmationsByCode.get(normCode(code)) ?? null;
 }
@@ -409,9 +458,12 @@ export async function appendConfirmation(
   confirmingCodes.add(needle);
 
   try {
+    // Live sheet check — blocks agent 2 if agent 1 already confirmed.
+    await refreshConfirmations();
     const c = await getCache();
-    if (c.confirmationsByCode.has(needle)) {
-      throw new Error("Cet étudiant a déjà confirmé une filière.");
+    const existing = c.confirmationsByCode.get(needle);
+    if (existing) {
+      throw new Error(alreadyConfirmedMessage(existing));
     }
 
     await ensureWorkbookReady();
@@ -448,6 +500,8 @@ export async function appendConfirmation(
       DateConfirmation: date,
       Agent: agent,
     };
+    // Keep this instance's RAM in sync immediately (admin on other
+    // instances will refreshConfirmations from the Sheet).
     c.confirmationsByCode.set(needle, saved);
     c.confirmationCount += 1;
     c.confirmationList.unshift(saved);
@@ -512,14 +566,17 @@ export async function getStats(): Promise<{
   parFiliere: Record<string, number>;
 }> {
   const c = await getCache();
+  await refreshConfirmations();
+  const latest = await getCache();
   return {
     etudiants: c.etudiantCount,
-    confirmations: c.confirmationCount,
+    confirmations: latest.confirmationCount,
     parFiliere: { ...c.parFiliere },
   };
 }
 
 export async function listConfirmations(limit?: number): Promise<StudentRow[]> {
+  await refreshConfirmations();
   const c = await getCache();
   if (limit == null || limit <= 0) return [...c.confirmationList];
   return c.confirmationList.slice(0, limit);
