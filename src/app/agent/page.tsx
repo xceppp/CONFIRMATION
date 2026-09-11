@@ -254,24 +254,25 @@ export default function AgentPage() {
                 <div>
                   <dt className="text-amber-900/70">Filière confirmée</dt>
                   <dd className="text-lg font-semibold">
-                    {result.confirmation?.FiliereCode
-                      ? `${result.confirmation.FiliereCode} — `
-                      : ""}
-                    {result.confirmation?.Filiere || "—"}
+                    {result.confirmation?.Filiere ||
+                      result.confirmation?.FiliereCode ||
+                      "—"}
                   </dd>
                 </div>
-                <div>
-                  <dt className="text-amber-900/70">Confirmé par l&apos;agent</dt>
-                  <dd className="text-lg font-semibold">
-                    {result.confirmation?.Agent || "—"}
-                  </dd>
-                </div>
-                {result.confirmation?.DateConfirmation ? (
+                {result.confirmation?.Agent ? (
                   <div>
-                    <dt className="text-amber-900/70">Date</dt>
-                    <dd className="font-medium">
-                      {result.confirmation.DateConfirmation}
+                    <dt className="text-amber-900/70">
+                      Confirmé par l&apos;agent
+                    </dt>
+                    <dd className="text-lg font-semibold">
+                      {result.confirmation.Agent}
                     </dd>
+                  </div>
+                ) : null}
+                {result.confirmation?.Score ? (
+                  <div>
+                    <dt className="text-amber-900/70">Score</dt>
+                    <dd className="font-medium">{result.confirmation.Score}</dd>
                   </div>
                 ) : null}
               </dl>

@@ -228,21 +228,20 @@ export default function AdminConfirmationsPage() {
                 </span>
               </div>
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[720px] text-left text-sm">
+                <table className="w-full min-w-[640px] text-left text-sm">
                   <thead>
                     <tr className="border-b border-[var(--line)] text-[var(--muted)]">
                       <th className="py-2 pr-3 font-medium">#</th>
                       <th className="py-2 pr-3 font-medium">Score</th>
-                      <th className="py-2 pr-3 font-medium">Code</th>
-                      <th className="py-2 pr-3 font-medium">Nom</th>
-                      <th className="py-2 pr-3 font-medium">Agent</th>
-                      <th className="py-2 font-medium">Date</th>
+                      <th className="py-2 pr-3 font-medium">CNE</th>
+                      <th className="py-2 pr-3 font-medium">Nom complet</th>
+                      <th className="py-2 font-medium">Filière</th>
                     </tr>
                   </thead>
                   <tbody>
                     {g.rows.map((r, i) => (
                       <tr
-                        key={`${r.Code}-${i}`}
+                        key={`${r.CNE || r.Code}-${i}`}
                         className="border-b border-[var(--line)]/70"
                       >
                         <td className="py-2 pr-3 text-[var(--muted)]">
@@ -251,14 +250,15 @@ export default function AdminConfirmationsPage() {
                         <td className="py-2 pr-3 font-semibold">
                           {r.Score || "—"}
                         </td>
-                        <td className="py-2 pr-3 font-medium">{r.Code}</td>
+                        <td className="py-2 pr-3 font-medium">
+                          {r.CNE || r.Code}
+                        </td>
                         <td className="py-2 pr-3">
-                          {r.PrenomFr} {r.NomFr}
+                          {r.NomComplet ||
+                            `${r.PrenomFr || ""} ${r.NomFr || ""}`.trim() ||
+                            "—"}
                         </td>
-                        <td className="py-2 pr-3">{r.Agent || "—"}</td>
-                        <td className="py-2 text-[var(--muted)]">
-                          {r.DateConfirmation}
-                        </td>
+                        <td className="py-2">{r.Filiere || "—"}</td>
                       </tr>
                     ))}
                   </tbody>

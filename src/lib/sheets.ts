@@ -7,6 +7,7 @@ import {
   type StudentRow,
 } from "./columns";
 import { getFiliereByCode } from "./filieres";
+import { sortConfirmationsByFiliereThenScore } from "./confirmations-export";
 
 const SHEET_CONFIRMATIONS = "Confirmations";
 const SHEET_AGENTS = "Agents";
@@ -205,26 +206,73 @@ function buildConfirmationsIndex(values: string[][]): Pick<
   }
 
   const headers = values[0].map(String);
-  const codeIdx = headers.indexOf("Code");
   const body = values.slice(1);
   const objects = rowsToObjects(
     headers,
     body.map((r) => r.map(String)),
-  );
+  ).map(normalizeConfirmationRow);
 
-  for (let i = 0; i < objects.length; i++) {
-    const row = objects[i];
-    const code =
-      codeIdx >= 0 ? normCode(String(body[i][codeIdx] || "")) : normCode(row.Code || "");
+  for (const row of objects) {
+    const code = normCode(row.CNE || row.Code || "");
     if (!code || confirmationsByCode.has(code)) continue;
     confirmationsByCode.set(code, row);
   }
 
+  // List already sorted like the app when rewritten; keep sheet order here.
   return {
     confirmationsByCode,
     confirmationCount: objects.length,
-    confirmationList: [...objects].reverse(),
+    confirmationList: objects,
   };
+}
+
+/** Normalize legacy wide rows + new slim CNE sheet into one shape. */
+function normalizeConfirmationRow(row: StudentRow): StudentRow {
+  const cne = normCode(row.CNE || row.Code || "");
+  const nomComplet =
+    String(row.NomComplet || "").trim() ||
+    `${row.PrenomFr || ""} ${row.NomFr || ""}`.trim();
+  const filiere = String(row.Filiere || row.FiliereCode || "").trim();
+  return {
+    CNE: cne,
+    Code: cne,
+    NomComplet: nomComplet,
+    PrenomFr: row.PrenomFr || "",
+    NomFr: row.NomFr || "",
+    Filiere: filiere,
+    FiliereCode: row.FiliereCode || "",
+    Score: String(row.Score || "").trim(),
+    Agent: row.Agent || "",
+    DateConfirmation: row.DateConfirmation || "",
+  };
+}
+
+function confirmationToSheetLine(row: StudentRow): string[] {
+  const n = normalizeConfirmationRow(row);
+  return [n.CNE, n.NomComplet, n.Filiere, n.Score];
+}
+
+async function rewriteConfirmationsSheet(rows: StudentRow[]): Promise<void> {
+  await ensureWorkbookReady();
+  const { sheets, sheetId } = getSheets();
+  const sorted = sortConfirmationsByFiliereThenScore(
+    rows.map(normalizeConfirmationRow),
+  );
+  const values = [
+    Array.from(CONFIRMATIONS_HEADERS),
+    ...sorted.map(confirmationToSheetLine),
+  ];
+
+  await sheets.spreadsheets.values.clear({
+    spreadsheetId: sheetId,
+    range: `${SHEET_CONFIRMATIONS}!A:Z`,
+  });
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: sheetId,
+    range: `${SHEET_CONFIRMATIONS}!A1`,
+    valueInputOption: "RAW",
+    requestBody: { values },
+  });
 }
 
 async function ensureSheetExists(
@@ -258,9 +306,11 @@ async function ensureSheetExists(
   });
   const current = (headerRes.data.values?.[0] || []).map(String);
   const expected = Array.from(headers);
-  const missing = expected.filter((h) => !current.includes(h));
-  if (current.length === 0 || missing.length > 0) {
-    // Rewrite header row so new columns (ex. Agent) exist.
+  const same =
+    current.length === expected.length &&
+    expected.every((h, i) => current[i] === h);
+  if (current.length === 0 || !same) {
+    // Keep header schema exact (Confirmations slim columns, etc.).
     await sheets.spreadsheets.values.update({
       spreadsheetId: sheetId,
       range: `${title}!A1`,
@@ -409,12 +459,33 @@ async function fetchConfirmationsIndex(): Promise<
 export async function refreshConfirmations(): Promise<void> {
   if (!confReloadPromise) {
     confReloadPromise = (async () => {
-      const conf = await fetchConfirmationsIndex();
-      // Ensure base cache exists (étudiants/agents), then patch confirmations.
+      await ensureWorkbookReady();
+      const { sheets, sheetId } = getSheets();
+      const res = await sheets.spreadsheets.values.get({
+        spreadsheetId: sheetId,
+        range: `${SHEET_CONFIRMATIONS}!A:Z`,
+      });
+      const raw = (res.data.values || []).map((r) => r.map(String));
+      const headers = raw[0] || [];
+      const conf = buildConfirmationsIndex(raw);
       const c = await getCache();
       c.confirmationsByCode = conf.confirmationsByCode;
       c.confirmationCount = conf.confirmationCount;
-      c.confirmationList = conf.confirmationList;
+      c.confirmationList = sortConfirmationsByFiliereThenScore(
+        conf.confirmationList,
+      );
+
+      const expected = Array.from(CONFIRMATIONS_HEADERS);
+      const headerOk =
+        headers.length === expected.length &&
+        expected.every((h, i) => headers[i] === h);
+      // Migrate legacy wide sheet → slim CNE/NomComplet/Filiere/Score, sorted.
+      if (!headerOk) {
+        await rewriteConfirmationsSheet(c.confirmationList);
+        c.confirmationList = sortConfirmationsByFiliereThenScore(
+          c.confirmationList,
+        );
+      }
     })().finally(() => {
       confReloadPromise = null;
     });
@@ -423,10 +494,9 @@ export async function refreshConfirmations(): Promise<void> {
 }
 
 function alreadyConfirmedMessage(row: StudentRow): string {
-  const filiere = row.Filiere || row.FiliereCode || "?";
-  const agent = row.Agent ? ` par l'agent « ${row.Agent} »` : "";
-  const when = row.DateConfirmation ? ` (${row.DateConfirmation})` : "";
-  return `Cet étudiant a déjà confirmé la filière « ${filiere} »${agent}${when}.`;
+  const n = normalizeConfirmationRow(row);
+  const filiere = n.Filiere || "?";
+  return `Cet étudiant a déjà confirmé la filière « ${filiere} ». Une seule confirmation est autorisée.`;
 }
 
 export async function getEtudiantsByCode(code: string): Promise<StudentRow[]> {
@@ -458,7 +528,6 @@ export async function appendConfirmation(
   confirmingCodes.add(needle);
 
   try {
-    // Live sheet check — blocks agent 2 if agent 1 already confirmed.
     await refreshConfirmations();
     const c = await getCache();
     const existing = c.confirmationsByCode.get(needle);
@@ -466,45 +535,25 @@ export async function appendConfirmation(
       throw new Error(alreadyConfirmedMessage(existing));
     }
 
-    await ensureWorkbookReady();
-    if (!confirmationsHeadersSynced) {
-      const { sheets, sheetId } = getSheets();
-      await ensureSheetExists(
-        sheets,
-        sheetId,
-        SHEET_CONFIRMATIONS,
-        CONFIRMATIONS_HEADERS,
-      );
-      confirmationsHeadersSynced = true;
-    }
-    const { sheets, sheetId } = getSheets();
-    const date = new Date().toLocaleString("fr-FR", {
-      timeZone: "Africa/Casablanca",
-    });
-    const line = CONFIRMATIONS_HEADERS.map((h) => {
-      if (h === "DateConfirmation") return date;
-      if (h === "Agent") return agent;
-      return student[h] ?? "";
-    });
-
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: sheetId,
-      range: `${SHEET_CONFIRMATIONS}!A1`,
-      valueInputOption: "RAW",
-      insertDataOption: "INSERT_ROWS",
-      requestBody: { values: [line] },
-    });
-
-    const saved: StudentRow = {
-      ...student,
-      DateConfirmation: date,
+    const saved = normalizeConfirmationRow({
+      CNE: needle,
+      Code: needle,
+      NomComplet: `${student.PrenomFr || ""} ${student.NomFr || ""}`.trim(),
+      PrenomFr: student.PrenomFr || "",
+      NomFr: student.NomFr || "",
+      Filiere: student.Filiere || student.FiliereCode || "",
+      FiliereCode: student.FiliereCode || "",
+      Score: student.Score || "",
       Agent: agent,
-    };
-    // Keep this instance's RAM in sync immediately (admin on other
-    // instances will refreshConfirmations from the Sheet).
+    });
+
+    const nextList = [...c.confirmationList, saved];
+    // Rewrite whole Confirmations tab: slim columns, grouped by filière, score ↓
+    await rewriteConfirmationsSheet(nextList);
+
     c.confirmationsByCode.set(needle, saved);
-    c.confirmationCount += 1;
-    c.confirmationList.unshift(saved);
+    c.confirmationCount = nextList.length;
+    c.confirmationList = sortConfirmationsByFiliereThenScore(nextList);
   } finally {
     confirmingCodes.delete(needle);
   }

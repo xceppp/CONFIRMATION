@@ -35,10 +35,12 @@ export async function POST(request: Request) {
 
     if (existing) {
       const filiere = existing.Filiere || existing.FiliereCode || "?";
-      const agent = existing.Agent || "?";
+      const agent = existing.Agent || "";
       return NextResponse.json(
         {
-          error: `Cet étudiant a déjà confirmé la filière « ${filiere} » par l'agent « ${agent} ».`,
+          error: agent
+            ? `Cet étudiant a déjà confirmé la filière « ${filiere} » (par « ${agent} »).`
+            : `Cet étudiant a déjà confirmé la filière « ${filiere} ». Une seule confirmation est autorisée.`,
           alreadyConfirmed: true,
           confirmation: existing,
         },
