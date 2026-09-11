@@ -18,6 +18,9 @@ type SearchResult = {
     FiliereCode?: string;
     DateConfirmation?: string;
     Agent?: string;
+    Score?: string;
+    NomComplet?: string;
+    CNE?: string;
   };
   student?: {
     Code: string;
