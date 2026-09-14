@@ -27,7 +27,7 @@ export default function AdminHomePage() {
         }
         setStats(data.stats);
       } catch {
-        setError("Erreur r├®seau (stats).");
+        setError("Erreur réseau (stats).");
       } finally {
         setLoading(false);
       }
@@ -37,7 +37,7 @@ export default function AdminHomePage() {
   return (
     <div>
       <p className="mb-6 text-[var(--muted)]">
-        G├®rez les agents, importez les listes (une feuille Google par fili├¿re),
+        Gérez les agents, importez les listes (une feuille Google par filière),
         suivez les confirmations.
       </p>
 
@@ -49,22 +49,22 @@ export default function AdminHomePage() {
 
       <section className="mb-6 grid gap-3 sm:grid-cols-3">
         <div className="rounded-2xl border border-[var(--line)] bg-[var(--bg-card)] p-4">
-          <p className="text-sm text-[var(--muted)]">Lignes ├®tudiants</p>
+          <p className="text-sm text-[var(--muted)]">Lignes étudiants</p>
           <p className="text-3xl font-semibold">
-            {loading ? "ÔÇª" : (stats?.etudiants ?? 0)}
+            {loading ? "…" : (stats?.etudiants ?? 0)}
           </p>
         </div>
         <div className="rounded-2xl border border-[var(--line)] bg-[var(--bg-card)] p-4">
           <p className="text-sm text-[var(--muted)]">Confirmations</p>
           <p className="text-3xl font-semibold">
-            {loading ? "ÔÇª" : (stats?.confirmations ?? 0)}
+            {loading ? "…" : (stats?.confirmations ?? 0)}
           </p>
         </div>
         <div className="rounded-2xl border border-[var(--line)] bg-[var(--bg-card)] p-4">
-          <p className="text-sm text-[var(--muted)]">Feuilles fili├¿re</p>
+          <p className="text-sm text-[var(--muted)]">Feuilles filière</p>
           <p className="text-3xl font-semibold">
             {loading
-              ? "ÔÇª"
+              ? "…"
               : (stats?.filiereSheets?.length ??
                 Object.keys(stats?.parFiliere || {}).length)}
           </p>
@@ -78,7 +78,7 @@ export default function AdminHomePage() {
         >
           <p className="font-semibold">Importation</p>
           <p className="mt-1 text-sm text-[var(--muted)]">
-            CSV ÔåÆ feuille nomm├®e comme la fili├¿re (ex. FBA, GI).
+            CSV → feuille nommée comme la filière (ex. FBA, GI).
           </p>
         </Link>
         <Link
@@ -96,14 +96,14 @@ export default function AdminHomePage() {
         >
           <p className="font-semibold">Confirmations</p>
           <p className="mt-1 text-sm text-[var(--muted)]">
-            Derni├¿res inscriptions confirm├®es.
+            Dernières inscriptions confirmées.
           </p>
         </Link>
       </div>
 
       {stats && Object.keys(stats.parFiliere).length > 0 ? (
         <section className="rounded-2xl border border-[var(--line)] bg-[var(--bg-card)] p-5">
-          <h2 className="text-lg font-semibold">R├®partition par feuille</h2>
+          <h2 className="text-lg font-semibold">Répartition par feuille</h2>
           <ul className="mt-3 grid gap-2 sm:grid-cols-2">
             {Object.entries(stats.parFiliere)
               .sort(([a], [b]) => a.localeCompare(b))
