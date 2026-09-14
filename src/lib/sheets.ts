@@ -754,7 +754,8 @@ export async function appendEtudiants(
     ETUDIANTS_HEADERS.map((h) => row[h] ?? ""),
   );
 
-  const chunkSize = 500;
+  // Larger chunks = fewer Google API round-trips (important on Vercel timeouts).
+  const chunkSize = 2000;
   for (let i = 0; i < values.length; i += chunkSize) {
     const chunk = values.slice(i, i + chunkSize);
     await sheets.spreadsheets.values.append({

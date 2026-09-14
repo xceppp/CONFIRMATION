@@ -11,17 +11,65 @@ type BulkFileResult = {
   error?: string;
 };
 
+async function readApiError(res: Response): Promise<string> {
+  const text = await res.text();
+  try {
+    const data = JSON.parse(text) as { error?: string };
+    if (data.error) return data.error;
+  } catch {
+    /* not JSON — often a Vercel timeout / HTML page */
+  }
+  if (res.status === 413) {
+    return "Fichier trop volumineux pour le serveur.";
+  }
+  if (res.status === 504 || res.status === 502) {
+    return "Délai dépassé (timeout). Réessayez fichier par fichier.";
+  }
+  if (!text) return `Erreur serveur (${res.status}).`;
+  return text.slice(0, 180);
+}
+
 export default function AdminImportPage() {
   const [filiereCode, setFiliereCode] = useState("FBA");
   const [file, setFile] = useState<File | null>(null);
   const [bulkFiles, setBulkFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [bulkUploading, setBulkUploading] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [bulkMessage, setBulkMessage] = useState("");
   const [bulkError, setBulkError] = useState("");
   const [bulkResults, setBulkResults] = useState<BulkFileResult[]>([]);
+
+  async function uploadOneFile(
+    csv: File,
+    code: string,
+  ): Promise<{ ok: boolean; imported?: number; error?: string; message?: string }> {
+    const form = new FormData();
+    form.append("file", csv);
+    form.append("filiereCode", code);
+    const res = await fetch("/api/admin/upload", {
+      method: "POST",
+      body: form,
+    });
+    if (!res.ok) {
+      return { ok: false, error: await readApiError(res) };
+    }
+    try {
+      const data = (await res.json()) as {
+        imported?: number;
+        message?: string;
+      };
+      return {
+        ok: true,
+        imported: data.imported,
+        message: data.message,
+      };
+    } catch {
+      return { ok: false, error: "Réponse serveur invalide." };
+    }
+  }
 
   async function onUpload(e: FormEvent) {
     e.preventDefault();
@@ -34,19 +82,12 @@ export default function AdminImportPage() {
 
     setUploading(true);
     try {
-      const form = new FormData();
-      form.append("file", file);
-      form.append("filiereCode", filiereCode);
-      const res = await fetch("/api/admin/upload", {
-        method: "POST",
-        body: form,
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || "Import impossible");
+      const result = await uploadOneFile(file, filiereCode);
+      if (!result.ok) {
+        setError(result.error || "Import impossible");
         return;
       }
-      setMessage(data.message);
+      setMessage(result.message || "Import terminé.");
       setFile(null);
     } catch {
       setError("Erreur réseau pendant l'import.");
@@ -60,6 +101,7 @@ export default function AdminImportPage() {
     setBulkError("");
     setBulkMessage("");
     setBulkResults([]);
+    setBulkProgress("");
 
     if (bulkFiles.length === 0) {
       setBulkError("Choisissez un ou plusieurs fichiers CSV.");
@@ -67,26 +109,78 @@ export default function AdminImportPage() {
     }
 
     setBulkUploading(true);
+    const results: BulkFileResult[] = [];
+    let totalImported = 0;
+    let failed = 0;
+
     try {
-      const form = new FormData();
-      for (const f of bulkFiles) {
-        form.append("files", f);
+      // One file = one request (évite timeout Vercel sur un gros lot).
+      for (let i = 0; i < bulkFiles.length; i++) {
+        const csv = bulkFiles[i];
+        setBulkProgress(
+          `Fichier ${i + 1}/${bulkFiles.length} : ${csv.name}…`,
+        );
+
+        const filiere = detectFiliereFromFilename(csv.name);
+        if (!filiere) {
+          failed += 1;
+          results.push({
+            file: csv.name,
+            ok: false,
+            error:
+              "Code filière introuvable dans le nom (ex: … FBA.csv).",
+          });
+          setBulkResults([...results]);
+          continue;
+        }
+
+        try {
+          const result = await uploadOneFile(csv, filiere.code);
+          if (!result.ok) {
+            failed += 1;
+            results.push({
+              file: csv.name,
+              ok: false,
+              filiereCode: filiere.code,
+              error: result.error,
+            });
+          } else {
+            totalImported += result.imported || 0;
+            results.push({
+              file: csv.name,
+              ok: true,
+              filiereCode: filiere.code,
+              imported: result.imported,
+            });
+          }
+        } catch {
+          failed += 1;
+          results.push({
+            file: csv.name,
+            ok: false,
+            filiereCode: filiere.code,
+            error: "Erreur réseau sur ce fichier.",
+          });
+        }
+
+        setBulkResults([...results]);
       }
-      const res = await fetch("/api/admin/upload-bulk", {
-        method: "POST",
-        body: form,
-      });
-      const data = await res.json();
-      setBulkResults(data.results || []);
-      if (!res.ok) {
-        setBulkError(data.error || "Import groupé impossible");
-        return;
+
+      const okCount = results.filter((r) => r.ok).length;
+      if (okCount === 0) {
+        setBulkError("Aucun fichier n'a pu être importé.");
+      } else if (failed > 0) {
+        setBulkMessage(
+          `${totalImported} étudiants importés (${okCount} OK, ${failed} échec(s)).`,
+        );
+      } else {
+        setBulkMessage(
+          `${totalImported} étudiants importés depuis ${okCount} fichier(s).`,
+        );
+        setBulkFiles([]);
       }
-      setBulkMessage(data.message);
-      setBulkFiles([]);
-    } catch {
-      setBulkError("Erreur réseau pendant l'import groupé.");
     } finally {
+      setBulkProgress("");
       setBulkUploading(false);
     }
   }
@@ -110,8 +204,8 @@ export default function AdminImportPage() {
       >
         <h3 className="text-lg font-semibold">Import groupé</h3>
         <p className="mt-1 text-sm text-[var(--muted)]">
-          Sélectionnez plusieurs CSV d&apos;un coup. Le code filière doit
-          figurer dans le nom du fichier — ex.{" "}
+          Sélectionnez plusieurs CSV. Chaque fichier est importé un par un
+          (plus fiable). Le code filière doit figurer dans le nom — ex.{" "}
           <code className="rounded bg-white px-1 py-0.5">
             liste-attente-selection FBA.csv
           </code>
@@ -154,6 +248,12 @@ export default function AdminImportPage() {
               );
             })}
           </ul>
+        ) : null}
+
+        {bulkProgress ? (
+          <p className="mt-4 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            {bulkProgress}
+          </p>
         ) : null}
 
         {bulkError ? (

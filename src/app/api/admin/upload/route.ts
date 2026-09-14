@@ -5,7 +5,7 @@ import { getFiliereByCode } from "@/lib/filieres";
 import { appendEtudiants } from "@/lib/sheets";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 export async function POST(request: Request) {
   if (!(await requireAdmin())) {
