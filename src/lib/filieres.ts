@@ -29,3 +29,22 @@ export const FILIERES: Filiere[] = [
 export function getFiliereByCode(code: string): Filiere | undefined {
   return FILIERES.find((f) => f.code.toUpperCase() === code.toUpperCase());
 }
+
+/**
+ * Détecte le code filière dans le nom du fichier
+ * (ex: "liste-attente-selection FBA.csv" → FBA).
+ * Les codes longs sont testés en premier (GETE avant GTE, etc.).
+ */
+export function detectFiliereFromFilename(
+  filename: string,
+): Filiere | undefined {
+  const base = filename.replace(/\.csv$/i, "").toUpperCase();
+  const sorted = [...FILIERES].sort((a, b) => b.code.length - a.code.length);
+
+  for (const f of sorted) {
+    const re = new RegExp(`(^|[^A-Z0-9])${f.code}([^A-Z0-9]|$)`, "i");
+    if (re.test(base)) return f;
+  }
+
+  return undefined;
+}

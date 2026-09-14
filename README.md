@@ -65,7 +65,9 @@ npm run dev
 
 ## Usage
 
-1. **Admin** → importer chaque CSV en choisissant la filière (ex. FBA aujourd’hui, les 9 autres plus tard)
+1. **Admin** → importer les CSV :
+   - **Import groupé** : sélectionnez tous les fichiers d’un coup — le code filière doit être dans le nom (`… FBA.csv`, `DWM.csv`, …)
+   - **Import individuel** : un fichier + choix manuel de la filière
 2. **Agent** → code Massar → voir les filières → confirmer **une** seule
 3. Tout arrive dans la feuille **Confirmations** (plus de fusion manuelle)
 
