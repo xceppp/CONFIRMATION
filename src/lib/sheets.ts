@@ -821,10 +821,12 @@ export async function listConfirmations(limit?: number): Promise<StudentRow[]> {
  */
 export async function clearConfirmationsLog(): Promise<number> {
   await ensureWorkbookReady();
-  const { sheets, sheetId } = getSheets();
+  // Live count from Sheet (not stale RAM).
+  await refreshConfirmations();
   const c = await getCache();
   const previous = c.confirmationCount;
 
+  const { sheets, sheetId } = getSheets();
   await sheets.spreadsheets.values.clear({
     spreadsheetId: sheetId,
     range: `${SHEET_CONFIRMATIONS}!A:ZZ`,
@@ -836,10 +838,9 @@ export async function clearConfirmationsLog(): Promise<number> {
     requestBody: { values: [Array.from(CONFIRMATIONS_HEADERS)] },
   });
 
-  c.confirmationsByCode = new Map();
-  c.confirmationCount = 0;
-  c.confirmationList = [];
-  confReloadPromise = null;
+  // Drop all in-memory state so every instance re-reads empty Sheet.
+  await invalidateCache();
+  confirmingCodes.clear();
 
   return previous;
 }
