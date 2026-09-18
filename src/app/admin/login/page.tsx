@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 
 export default function AdminLoginPage() {
   const router = useRouter();
+  const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -17,7 +18,7 @@ export default function AdminLoginPage() {
       const res = await fetch("/api/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ role: "admin", password }),
+        body: JSON.stringify({ role: "admin", name, password }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -46,15 +47,28 @@ export default function AdminLoginPage() {
           Accès admin
         </h1>
         <p className="mt-2 text-[var(--muted)]">
-          Mot de passe administrateur uniquement.
+          Identifiant et mot de passe administrateur.
         </p>
 
         <form onSubmit={onSubmit} className="mt-8 space-y-4">
           <label className="block">
+            <span className="mb-1.5 block text-sm font-medium">Nom</span>
+            <input
+              type="text"
+              autoFocus
+              autoComplete="username"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="w-full rounded-xl border border-[var(--line)] bg-white px-4 py-3 text-lg outline-none ring-[var(--brand)] focus:ring-2"
+              required
+            />
+          </label>
+
+          <label className="block">
             <span className="mb-1.5 block text-sm font-medium">Mot de passe</span>
             <input
               type="password"
-              autoFocus
+              autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full rounded-xl border border-[var(--line)] bg-white px-4 py-3 text-lg outline-none ring-[var(--brand)] focus:ring-2"

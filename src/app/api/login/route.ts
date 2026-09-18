@@ -1,8 +1,5 @@
 import { NextResponse } from "next/server";
-import {
-  createSessionCookie,
-  verifyAdminPassword,
-} from "@/lib/auth";
+import { createSessionCookie, verifyAdminCredentials } from "@/lib/auth";
 import { verifyAgentCredentials } from "@/lib/sheets";
 
 export async function POST(request: Request) {
@@ -19,14 +16,20 @@ export async function POST(request: Request) {
 
   try {
     if (role === "admin") {
-      if (!verifyAdminPassword(password)) {
+      const name = String(body?.name || "").trim();
+      const adminName = verifyAdminCredentials(name, password);
+      if (!adminName) {
         return NextResponse.json(
-          { error: "Mot de passe admin incorrect." },
+          { error: "Nom ou mot de passe admin incorrect." },
           { status: 401 },
         );
       }
-      await createSessionCookie({ role: "admin", name: "Admin" });
-      return NextResponse.json({ ok: true, role: "admin" });
+      await createSessionCookie({ role: "admin", name: adminName });
+      return NextResponse.json({
+        ok: true,
+        role: "admin",
+        name: adminName,
+      });
     }
 
     if (role === "agent") {

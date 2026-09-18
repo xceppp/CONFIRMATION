@@ -5,6 +5,7 @@ import {
   type Session,
   type SessionRole,
 } from "./session-types";
+import { findAdminAccount } from "./admins";
 
 export { COOKIE_NAME, type Session, type SessionRole };
 
@@ -29,10 +30,33 @@ function safeEqual(a: string, b: string): boolean {
   }
 }
 
+/** Legacy: mot de passe APP_PASSWORD seul (compte Admin). */
 export function verifyAdminPassword(password: string): boolean {
   const expected = process.env.APP_PASSWORD || "";
   if (!expected) return false;
   return safeEqual(password, expected);
+}
+
+/**
+ * Connexion admin par nom + mot de passe.
+ * - amine / localdev, saida / saida
+ * - ou nom « Admin » (ou vide) + APP_PASSWORD
+ * Retourne le nom canonique ou null.
+ */
+export function verifyAdminCredentials(
+  name: string,
+  password: string,
+): string | null {
+  const named = findAdminAccount(name, password);
+  if (named) {
+    return named.name.charAt(0).toUpperCase() + named.name.slice(1);
+  }
+
+  const n = name.trim().toLowerCase();
+  if ((!n || n === "admin") && verifyAdminPassword(password)) {
+    return "Admin";
+  }
+  return null;
 }
 
 function encodePayload(session: Omit<Session, "ts"> & { ts?: number }): string {

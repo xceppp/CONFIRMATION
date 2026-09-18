@@ -18,6 +18,8 @@ export default function AdminConfirmationsPage() {
   const [exportCols, setExportCols] = useState<string[]>([...DEFAULT_EXPORT_KEYS]);
   const [exporting, setExporting] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [clearOpen, setClearOpen] = useState(false);
+  const [clearPassword, setClearPassword] = useState("");
 
   async function load() {
     setLoading(true);
@@ -99,6 +101,10 @@ export default function AdminConfirmationsPage() {
   }
 
   async function doClearLog() {
+    if (!clearPassword.trim()) {
+      setError("Mot de passe requis pour vider le journal.");
+      return;
+    }
     if (
       !window.confirm(
         "Effacer TOUT le journal des confirmations ?\n\nLes agents et la base étudiants (filières) seront conservés.",
@@ -111,6 +117,8 @@ export default function AdminConfirmationsPage() {
     try {
       const res = await fetch("/api/admin/confirmations/clear", {
         method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: clearPassword }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -118,6 +126,8 @@ export default function AdminConfirmationsPage() {
         return;
       }
       setGroups([]);
+      setClearOpen(false);
+      setClearPassword("");
       await load();
     } catch {
       setError("Erreur réseau pendant l'effacement.");
@@ -145,10 +155,14 @@ export default function AdminConfirmationsPage() {
           <button
             type="button"
             disabled={clearing || total === 0}
-            onClick={doClearLog}
+            onClick={() => {
+              setClearOpen((v) => !v);
+              setClearPassword("");
+              setError("");
+            }}
             className="rounded-xl border border-[var(--danger)] bg-white px-4 py-2.5 text-sm font-semibold text-[var(--danger)] hover:bg-red-50 disabled:opacity-50"
           >
-            {clearing ? "Effacement…" : "Vider le journal"}
+            Vider le journal
           </button>
           <button
             type="button"
@@ -159,6 +173,52 @@ export default function AdminConfirmationsPage() {
           </button>
         </div>
       </div>
+
+      {clearOpen ? (
+        <section className="mt-4 rounded-2xl border border-[var(--danger)]/40 bg-red-50/50 p-5">
+          <h3 className="text-lg font-semibold text-[var(--danger)]">
+            Confirmer l&apos;effacement
+          </h3>
+          <p className="mt-1 text-sm text-[var(--muted)]">
+            Entrez le mot de passe de sécurité pour vider le journal. Sans ce
+            mot de passe, rien n&apos;est effacé.
+          </p>
+          <label className="mt-4 block max-w-sm">
+            <span className="mb-1.5 block text-sm font-medium">
+              Mot de passe
+            </span>
+            <input
+              type="password"
+              value={clearPassword}
+              onChange={(e) => setClearPassword(e.target.value)}
+              className="w-full rounded-xl border border-[var(--line)] bg-white px-4 py-2.5 outline-none ring-[var(--danger)] focus:ring-2"
+              placeholder="Mot de passe requis"
+              autoComplete="off"
+            />
+          </label>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={clearing || !clearPassword.trim()}
+              onClick={doClearLog}
+              className="rounded-xl bg-[var(--danger)] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+            >
+              {clearing ? "Effacement…" : "Confirmer et vider"}
+            </button>
+            <button
+              type="button"
+              disabled={clearing}
+              onClick={() => {
+                setClearOpen(false);
+                setClearPassword("");
+              }}
+              className="rounded-xl border border-[var(--line)] bg-white px-4 py-2.5 text-sm font-semibold"
+            >
+              Annuler
+            </button>
+          </div>
+        </section>
+      ) : null}
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <label className="text-sm font-medium">
