@@ -17,6 +17,7 @@ export default function AdminConfirmationsPage() {
   const [exportOpen, setExportOpen] = useState(false);
   const [exportCols, setExportCols] = useState<string[]>([...DEFAULT_EXPORT_KEYS]);
   const [exporting, setExporting] = useState(false);
+  const [clearing, setClearing] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -97,6 +98,34 @@ export default function AdminConfirmationsPage() {
     }
   }
 
+  async function doClearLog() {
+    if (
+      !window.confirm(
+        "Effacer TOUT le journal des confirmations ?\n\nLes agents et la base étudiants (filières) seront conservés.",
+      )
+    ) {
+      return;
+    }
+    setClearing(true);
+    setError("");
+    try {
+      const res = await fetch("/api/admin/confirmations/clear", {
+        method: "DELETE",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.error || "Impossible d'effacer le journal");
+        return;
+      }
+      setGroups([]);
+      await load();
+    } catch {
+      setError("Erreur réseau pendant l'effacement.");
+    } finally {
+      setClearing(false);
+    }
+  }
+
   return (
     <div>
       <div className="flex flex-wrap items-end justify-between gap-4">
@@ -112,13 +141,23 @@ export default function AdminConfirmationsPage() {
             {loading ? "" : ` — ${total} affiché${total > 1 ? "s" : ""}`}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setExportOpen((v) => !v)}
-          className="rounded-xl bg-[var(--brand)] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[var(--brand-dark)]"
-        >
-          Exporter Excel
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={clearing || total === 0}
+            onClick={doClearLog}
+            className="rounded-xl border border-[var(--danger)] bg-white px-4 py-2.5 text-sm font-semibold text-[var(--danger)] hover:bg-red-50 disabled:opacity-50"
+          >
+            {clearing ? "Effacement…" : "Vider le journal"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setExportOpen((v) => !v)}
+            className="rounded-xl bg-[var(--brand)] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[var(--brand-dark)]"
+          >
+            Exporter Excel
+          </button>
+        </div>
       </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-3">

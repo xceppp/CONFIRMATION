@@ -815,6 +815,35 @@ export async function listConfirmations(limit?: number): Promise<StudentRow[]> {
   return c.confirmationList.slice(0, limit);
 }
 
+/**
+ * Wipe Confirmations log only.
+ * Keeps Agents + all filière student sheets (DB) untouched.
+ */
+export async function clearConfirmationsLog(): Promise<number> {
+  await ensureWorkbookReady();
+  const { sheets, sheetId } = getSheets();
+  const c = await getCache();
+  const previous = c.confirmationCount;
+
+  await sheets.spreadsheets.values.clear({
+    spreadsheetId: sheetId,
+    range: `${SHEET_CONFIRMATIONS}!A:ZZ`,
+  });
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: sheetId,
+    range: `${SHEET_CONFIRMATIONS}!A1`,
+    valueInputOption: "RAW",
+    requestBody: { values: [Array.from(CONFIRMATIONS_HEADERS)] },
+  });
+
+  c.confirmationsByCode = new Map();
+  c.confirmationCount = 0;
+  c.confirmationList = [];
+  confReloadPromise = null;
+
+  return previous;
+}
+
 /** Noms seuls — pour l'écran de connexion agents */
 export async function listAgentNames(): Promise<string[]> {
   const c = await getCache();
