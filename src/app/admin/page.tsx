@@ -71,7 +71,7 @@ export default function AdminHomePage() {
         </div>
       </section>
 
-      <div className="mb-6 grid gap-3 sm:grid-cols-3">
+      <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Link
           href="/admin/import"
           className="rounded-2xl border border-[var(--line)] bg-[var(--bg-card)] p-5 transition hover:border-[var(--brand)]"
@@ -97,6 +97,15 @@ export default function AdminHomePage() {
           <p className="font-semibold">Confirmations</p>
           <p className="mt-1 text-sm text-[var(--muted)]">
             Dernières inscriptions confirmées.
+          </p>
+        </Link>
+        <Link
+          href="/admin/final"
+          className="rounded-2xl border border-[var(--line)] bg-[var(--bg-card)] p-5 transition hover:border-[var(--brand)]"
+        >
+          <p className="font-semibold">Final</p>
+          <p className="mt-1 text-sm text-[var(--muted)]">
+            Places par filière → export top scores.
           </p>
         </Link>
       </div>

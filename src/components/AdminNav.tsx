@@ -8,6 +8,7 @@ const LINKS = [
   { href: "/admin/import", label: "Importation" },
   { href: "/admin/agents", label: "Agents" },
   { href: "/admin/confirmations", label: "Confirmations" },
+  { href: "/admin/final", label: "Final" },
 ];
 
 export function AdminNav() {
