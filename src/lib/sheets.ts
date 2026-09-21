@@ -10,6 +10,8 @@ import { getFiliereByCode } from "./filieres";
 import { sortConfirmationsByFiliereThenScore } from "./confirmations-export";
 
 const SHEET_CONFIRMATIONS = "Confirmations";
+/** Append-only mirror — never cleared by journal wipe. Used to repair lost rows. */
+const SHEET_CONFIRMATIONS_AUDIT = "ConfirmationsAudit";
 const SHEET_AGENTS = "Agents";
 const LEGACY_ETUDIANTS = "Etudiants";
 /** Tab name = filière code (DWM, FBA, …) */
@@ -320,29 +322,6 @@ function confirmationToSheetLine(row: StudentRow): string[] {
   ];
 }
 
-async function rewriteConfirmationsSheet(rows: StudentRow[]): Promise<void> {
-  await ensureWorkbookReady();
-  const { sheets, sheetId } = getSheets();
-  const sorted = sortConfirmationsByFiliereThenScore(
-    rows.map(normalizeConfirmationRow),
-  );
-  const values = [
-    Array.from(CONFIRMATIONS_HEADERS),
-    ...sorted.map(confirmationToSheetLine),
-  ];
-
-  await sheets.spreadsheets.values.clear({
-    spreadsheetId: sheetId,
-    range: `${SHEET_CONFIRMATIONS}!A:Z`,
-  });
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: sheetId,
-    range: `${SHEET_CONFIRMATIONS}!A1`,
-    valueInputOption: "RAW",
-    requestBody: { values },
-  });
-}
-
 async function ensureSheetExists(
   sheets: ReturnType<typeof google.sheets>,
   sheetId: string,
@@ -368,17 +347,21 @@ async function ensureSheetExists(
     return;
   }
 
-  const headerRes = await sheets.spreadsheets.values.get({
+  // Never touch header row if the sheet already has data rows —
+  // header-only writes used to participate in wipe races under load.
+  const probe = await sheets.spreadsheets.values.get({
     spreadsheetId: sheetId,
-    range: `${title}!1:1`,
+    range: `${title}!A1:A3`,
   });
-  const current = (headerRes.data.values?.[0] || []).map(String);
+  const probeRows = probe.data.values || [];
+  if (probeRows.length > 1) return;
+
+  const current = (probeRows[0] || []).map(String);
   const expected = Array.from(headers);
   const same =
     current.length === expected.length &&
     expected.every((h, i) => current[i] === h);
   if (current.length === 0 || !same) {
-    // Keep header schema exact (Confirmations slim columns, etc.).
     await sheets.spreadsheets.values.update({
       spreadsheetId: sheetId,
       range: `${title}!A1`,
@@ -398,10 +381,45 @@ export async function ensureWorkbookReady() {
       SHEET_CONFIRMATIONS,
       CONFIRMATIONS_HEADERS,
     ),
+    ensureSheetExists(
+      sheets,
+      sheetId,
+      SHEET_CONFIRMATIONS_AUDIT,
+      CONFIRMATIONS_HEADERS,
+    ),
     ensureSheetExists(sheets, sheetId, SHEET_AGENTS, AGENTS_HEADERS),
   ]);
   workbookReady = true;
   confirmationsHeadersSynced = true;
+}
+
+/** Append one row; throws if Google did not actually write cells. */
+async function appendSheetRow(
+  title: string,
+  line: string[],
+  label: string,
+  attempts = 8,
+): Promise<void> {
+  const { sheets, sheetId } = getSheets();
+  const res = await withSheetsRetry(
+    label,
+    () =>
+      sheets.spreadsheets.values.append({
+        spreadsheetId: sheetId,
+        range: `${title}!A1`,
+        valueInputOption: "RAW",
+        insertDataOption: "INSERT_ROWS",
+        requestBody: { values: [line] },
+      }),
+    attempts,
+  );
+  const updatedRows = Number(res.data.updates?.updatedRows || 0);
+  const updatedCells = Number(res.data.updates?.updatedCells || 0);
+  if (updatedRows < 1 && updatedCells < 1) {
+    throw new Error(
+      "Confirmation non écrite dans Google Sheets. Réessayez immédiatement.",
+    );
+  }
 }
 
 async function listSheetTitles(): Promise<string[]> {
@@ -663,7 +681,6 @@ export async function refreshConfirmations(options?: {
         }),
       );
       const raw = (res.data.values || []).map((r) => r.map(String));
-      const headers = raw[0] || [];
       const conf = buildConfirmationsIndex(raw);
       const c = await getCache();
       c.confirmationsByCode = conf.confirmationsByCode;
@@ -672,23 +689,7 @@ export async function refreshConfirmations(options?: {
         conf.confirmationList,
       );
       confirmationsFetchedAt = Date.now();
-
-      const expected = Array.from(CONFIRMATIONS_HEADERS);
-      const headerOk =
-        headers.length === expected.length &&
-        expected.every((h, i) => headers[i] === h);
-      // Only migrate headers when sheet is empty —
-      // never rewrite a populated sheet from a refresh (race risk on Vercel).
-      if (!headerOk && conf.confirmationCount === 0) {
-        await withSheetsRetry("confirmations.header", () =>
-          sheets.spreadsheets.values.update({
-            spreadsheetId: sheetId,
-            range: `${SHEET_CONFIRMATIONS}!A1`,
-            valueInputOption: "RAW",
-            requestBody: { values: [expected] },
-          }),
-        );
-      }
+      // Never write to Confirmations from a refresh — append-only confirms only.
     })().finally(() => {
       confReloadPromise = null;
     });
@@ -769,21 +770,24 @@ export async function appendConfirmation(
       }),
     });
 
-    // Append only — heavy retries so agents can force confirm under quota.
+    // Append only to Confirmations + Audit mirror. Never clear/rewrite.
     await ensureWorkbookReady();
-    const { sheets, sheetId } = getSheets();
-    await withSheetsRetry(
-      "confirmations.append",
-      () =>
-        sheets.spreadsheets.values.append({
-          spreadsheetId: sheetId,
-          range: `${SHEET_CONFIRMATIONS}!A1`,
-          valueInputOption: "RAW",
-          insertDataOption: "INSERT_ROWS",
-          requestBody: { values: [confirmationToSheetLine(saved)] },
-        }),
-      8,
-    );
+    const line = confirmationToSheetLine(saved);
+    await appendSheetRow(SHEET_CONFIRMATIONS, line, "confirmations.append", 8);
+    // Best-effort second copy — never blocks success if audit lags under quota.
+    try {
+      await appendSheetRow(
+        SHEET_CONFIRMATIONS_AUDIT,
+        line,
+        "confirmations.audit",
+        4,
+      );
+    } catch (e) {
+      console.warn(
+        "[sheets] audit append failed (main Confirmations row is saved):",
+        e instanceof Error ? e.message : e,
+      );
+    }
 
     // Optimistic RAM update — skip second full Sheet GET (quota).
     c = await getCache();
@@ -880,32 +884,13 @@ export async function listConfirmations(limit?: number): Promise<StudentRow[]> {
 
 /**
  * Wipe Confirmations log only.
- * Keeps Agents + all filière student sheets (DB) untouched.
+ * DISABLED during confirmation day — refuse so nobody can wipe live data.
+ * ConfirmationsAudit is never cleared by this function.
  */
 export async function clearConfirmationsLog(): Promise<number> {
-  await ensureWorkbookReady();
-  // Live count from Sheet (not stale RAM).
-  await refreshConfirmations();
-  const c = await getCache();
-  const previous = c.confirmationCount;
-
-  const { sheets, sheetId } = getSheets();
-  await sheets.spreadsheets.values.clear({
-    spreadsheetId: sheetId,
-    range: `${SHEET_CONFIRMATIONS}!A:ZZ`,
-  });
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: sheetId,
-    range: `${SHEET_CONFIRMATIONS}!A1`,
-    valueInputOption: "RAW",
-    requestBody: { values: [Array.from(CONFIRMATIONS_HEADERS)] },
-  });
-
-  // Drop all in-memory state so every instance re-reads empty Sheet.
-  await invalidateCache();
-  confirmingCodes.clear();
-
-  return previous;
+  throw new Error(
+    "Effacement du journal désactivé pendant les confirmations. Aucune donnée n'a été touchée.",
+  );
 }
 
 /** Noms seuls — pour l'écran de connexion agents */
