@@ -18,10 +18,17 @@ export async function GET(request: Request) {
   }
 
   try {
-    const [rows, confirmed] = await Promise.all([
-      getEtudiantsByCode(code),
-      isAlreadyConfirmed(code),
-    ]);
+    const rows = await getEtudiantsByCode(code);
+
+    // If Confirmations sheet is quota-blocked, still show the student so
+    // the agent can force confirmation (append path has its own retries).
+    let confirmed = null;
+    try {
+      confirmed = await isAlreadyConfirmed(code);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!/quota|saturé|rate limit/i.test(msg)) throw e;
+    }
 
     if (rows.length === 0) {
       return NextResponse.json({

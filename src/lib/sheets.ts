@@ -39,8 +39,52 @@ let warmPromise: Promise<SheetCache> | null = null;
 let confReloadPromise: Promise<void> | null = null;
 let studentsReloadPromise: Promise<void> | null = null;
 let studentsFetchedAt = 0;
+let confirmationsFetchedAt = 0;
 const confirmingCodes = new Set<string>();
-const STUDENTS_TTL_MS = 10_000;
+const STUDENTS_TTL_MS = 30_000;
+/** Soft TTL — avoid hammering Sheets on every Massar lookup under load. */
+const CONFIRMATIONS_TTL_MS = 5_000;
+
+function isQuotaError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  const status =
+    e && typeof e === "object" && "code" in e
+      ? Number((e as { code?: number }).code)
+      : NaN;
+  return (
+    status === 429 ||
+    /quota|rate limit|rateLimitExceeded|userRateLimitExceeded|Backend Error/i.test(
+      msg,
+    )
+  );
+}
+
+async function withSheetsRetry<T>(
+  label: string,
+  fn: () => Promise<T>,
+  attempts = 6,
+): Promise<T> {
+  let last: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      last = e;
+      if (!isQuotaError(e) || i === attempts - 1) {
+        if (isQuotaError(e)) {
+          throw new Error(
+            "Google Sheets saturé (quota). Réessayez dans quelques secondes — la confirmation sera enregistrée.",
+          );
+        }
+        throw e;
+      }
+      const wait = Math.min(8000, 400 * 2 ** i) + Math.floor(Math.random() * 250);
+      console.warn(`[sheets] ${label} quota/retry ${i + 1}/${attempts} wait ${wait}ms`);
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+  throw last;
+}
 
 function getAuth() {
   const email = process.env.GOOGLE_CLIENT_EMAIL;
@@ -458,6 +502,7 @@ export async function invalidateCache(): Promise<void> {
   confReloadPromise = null;
   studentsReloadPromise = null;
   studentsFetchedAt = 0;
+  confirmationsFetchedAt = 0;
 }
 
 async function loadEtudiantsPartsFromSheets(): Promise<{
@@ -479,10 +524,12 @@ async function loadEtudiantsPartsFromSheets(): Promise<{
 
   if (ranges.length === 1) {
     // Only Agents — no filière tabs yet
-    const agentsRes = await sheets.spreadsheets.values.get({
-      spreadsheetId: sheetId,
-      range: `${SHEET_AGENTS}!A:Z`,
-    });
+    const agentsRes = await withSheetsRetry("agents.get", () =>
+      sheets.spreadsheets.values.get({
+        spreadsheetId: sheetId,
+        range: `${SHEET_AGENTS}!A:Z`,
+      }),
+    );
     return {
       etud: {
         etudiantsByCode: new Map(),
@@ -496,10 +543,12 @@ async function loadEtudiantsPartsFromSheets(): Promise<{
     };
   }
 
-  const batch = await sheets.spreadsheets.values.batchGet({
-    spreadsheetId: sheetId,
-    ranges,
-  });
+  const batch = await withSheetsRetry("students.batchGet", () =>
+    sheets.spreadsheets.values.batchGet({
+      spreadsheetId: sheetId,
+      ranges,
+    }),
+  );
   const valueRanges = batch.data.valueRanges || [];
   const etudParts: Pick<
     SheetCache,
@@ -590,15 +639,29 @@ async function fetchConfirmationsIndex(): Promise<
  * Critical on Vercel: each serverless instance has its own memory —
  * Sheet is the shared source of truth across agents/admin.
  */
-export async function refreshConfirmations(): Promise<void> {
+export async function refreshConfirmations(options?: {
+  force?: boolean;
+}): Promise<void> {
+  const force = Boolean(options?.force);
+  if (
+    !force &&
+    cache &&
+    confirmationsFetchedAt > 0 &&
+    Date.now() - confirmationsFetchedAt < CONFIRMATIONS_TTL_MS
+  ) {
+    return;
+  }
+
   if (!confReloadPromise) {
     confReloadPromise = (async () => {
       await ensureWorkbookReady();
       const { sheets, sheetId } = getSheets();
-      const res = await sheets.spreadsheets.values.get({
-        spreadsheetId: sheetId,
-        range: `${SHEET_CONFIRMATIONS}!A:Z`,
-      });
+      const res = await withSheetsRetry("confirmations.get", () =>
+        sheets.spreadsheets.values.get({
+          spreadsheetId: sheetId,
+          range: `${SHEET_CONFIRMATIONS}!A:Z`,
+        }),
+      );
       const raw = (res.data.values || []).map((r) => r.map(String));
       const headers = raw[0] || [];
       const conf = buildConfirmationsIndex(raw);
@@ -608,20 +671,23 @@ export async function refreshConfirmations(): Promise<void> {
       c.confirmationList = sortConfirmationsByFiliereThenScore(
         conf.confirmationList,
       );
+      confirmationsFetchedAt = Date.now();
 
       const expected = Array.from(CONFIRMATIONS_HEADERS);
       const headerOk =
         headers.length === expected.length &&
         expected.every((h, i) => headers[i] === h);
-      // Only migrate headers when sheet is empty or header row alone —
+      // Only migrate headers when sheet is empty —
       // never rewrite a populated sheet from a refresh (race risk on Vercel).
       if (!headerOk && conf.confirmationCount === 0) {
-        await sheets.spreadsheets.values.update({
-          spreadsheetId: sheetId,
-          range: `${SHEET_CONFIRMATIONS}!A1`,
-          valueInputOption: "RAW",
-          requestBody: { values: [expected] },
-        });
+        await withSheetsRetry("confirmations.header", () =>
+          sheets.spreadsheets.values.update({
+            spreadsheetId: sheetId,
+            range: `${SHEET_CONFIRMATIONS}!A1`,
+            valueInputOption: "RAW",
+            requestBody: { values: [expected] },
+          }),
+        );
       }
     })().finally(() => {
       confReloadPromise = null;
@@ -650,11 +716,12 @@ export async function getEtudiantsByCode(code: string): Promise<StudentRow[]> {
   return latest.etudiantsByCode.get(normCode(code)) ?? [];
 }
 
-/** Always checks the live Confirmations sheet (not stale RAM alone). */
+/** Check Confirmations — soft TTL to spare quota; force on confirm write path. */
 export async function isAlreadyConfirmed(
   code: string,
+  options?: { force?: boolean },
 ): Promise<StudentRow | null> {
-  await refreshConfirmations();
+  await refreshConfirmations({ force: options?.force });
   const c = await getCache();
   return c.confirmationsByCode.get(normCode(code)) ?? null;
 }
@@ -674,8 +741,13 @@ export async function appendConfirmation(
   confirmingCodes.add(needle);
 
   try {
-    // 1) Live check — reject if already confirmed.
-    await refreshConfirmations();
+    // Soft check — if Sheets quota blocks the GET, still force the append.
+    try {
+      await refreshConfirmations({ force: false });
+    } catch (e) {
+      if (!isQuotaError(e)) throw e;
+      console.warn("[sheets] confirm check skipped (quota) — forcing append");
+    }
     let c = await getCache();
     const existing = c.confirmationsByCode.get(needle);
     if (existing) {
@@ -697,41 +769,30 @@ export async function appendConfirmation(
       }),
     });
 
-    // 2) Append only — never clear/rewrite the whole sheet here.
-    // Concurrent agents on Vercel used to race: clear+rewrite wiped other rows.
+    // Append only — heavy retries so agents can force confirm under quota.
     await ensureWorkbookReady();
     const { sheets, sheetId } = getSheets();
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: sheetId,
-      range: `${SHEET_CONFIRMATIONS}!A1`,
-      valueInputOption: "RAW",
-      insertDataOption: "INSERT_ROWS",
-      requestBody: { values: [confirmationToSheetLine(saved)] },
-    });
+    await withSheetsRetry(
+      "confirmations.append",
+      () =>
+        sheets.spreadsheets.values.append({
+          spreadsheetId: sheetId,
+          range: `${SHEET_CONFIRMATIONS}!A1`,
+          valueInputOption: "RAW",
+          insertDataOption: "INSERT_ROWS",
+          requestBody: { values: [confirmationToSheetLine(saved)] },
+        }),
+      8,
+    );
 
-    // 3) Re-read Sheet — if two agents raced, first CNE row wins.
-    confReloadPromise = null;
-    await refreshConfirmations();
+    // Optimistic RAM update — skip second full Sheet GET (quota).
     c = await getCache();
-    const winner = c.confirmationsByCode.get(needle);
-    if (!winner) {
-      throw new Error("Confirmation non enregistrée. Réessayez.");
-    }
-    if (winner.Agent && winner.Agent !== agent) {
-      // Someone else confirmed first — keep sheet as-is (append-only).
-      throw new Error(alreadyConfirmedMessage(winner));
-    }
-
-    // 4) Update RAM only (Sheet already has the append). Dedup/sort is admin-side.
-    c.confirmationsByCode.set(needle, winner.Agent ? winner : saved);
-    if (!c.confirmationList.some((r) => normCode(r.CNE || r.Code || "") === needle)) {
+    if (!c.confirmationsByCode.has(needle)) {
+      c.confirmationsByCode.set(needle, saved);
       c.confirmationList = sortConfirmationsByFiliereThenScore([
         ...c.confirmationList,
-        winner.Agent ? winner : saved,
+        saved,
       ]);
-      c.confirmationCount = c.confirmationList.length;
-    } else {
-      c.confirmationList = sortConfirmationsByFiliereThenScore(c.confirmationList);
       c.confirmationCount = c.confirmationList.length;
     }
   } finally {
@@ -799,8 +860,8 @@ export async function getStats(): Promise<{
   parFiliere: Record<string, number>;
   filiereSheets: string[];
 }> {
-  await refreshStudents({ force: true });
-  await refreshConfirmations();
+  await refreshStudents({ force: false });
+  await refreshConfirmations({ force: false });
   const latest = await getCache();
   return {
     etudiants: latest.etudiantCount,

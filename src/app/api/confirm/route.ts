@@ -1,10 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
-import {
-  appendConfirmation,
-  getEtudiantsByCode,
-  isAlreadyConfirmed,
-} from "@/lib/sheets";
+import { appendConfirmation, getEtudiantsByCode } from "@/lib/sheets";
 import type { StudentRow } from "@/lib/columns";
 
 export async function POST(request: Request) {
@@ -28,25 +24,8 @@ export async function POST(request: Request) {
   }
 
   try {
-    const [existing, rows] = await Promise.all([
-      isAlreadyConfirmed(code),
-      getEtudiantsByCode(code),
-    ]);
-
-    if (existing) {
-      const filiere = existing.Filiere || existing.FiliereCode || "?";
-      const agent = existing.Agent || "";
-      return NextResponse.json(
-        {
-          error: agent
-            ? `Cet étudiant a déjà confirmé la filière « ${filiere} » (par « ${agent} »).`
-            : `Cet étudiant a déjà confirmé la filière « ${filiere} ». Une seule confirmation est autorisée.`,
-          alreadyConfirmed: true,
-          confirmation: existing,
-        },
-        { status: 409 },
-      );
-    }
+    // One student read — skip extra Confirmations GET (append checks + retries).
+    const rows = await getEtudiantsByCode(code);
 
     const match = rows.find(
       (r) =>
@@ -74,12 +53,10 @@ export async function POST(request: Request) {
     const message = e instanceof Error ? e.message : "Erreur serveur";
     const already = message.includes("déjà confirmé");
     if (already) {
-      const confirmed = await isAlreadyConfirmed(code).catch(() => null);
       return NextResponse.json(
         {
           error: message,
           alreadyConfirmed: true,
-          confirmation: confirmed,
         },
         { status: 409 },
       );
