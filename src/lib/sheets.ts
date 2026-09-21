@@ -613,12 +613,15 @@ export async function refreshConfirmations(): Promise<void> {
       const headerOk =
         headers.length === expected.length &&
         expected.every((h, i) => headers[i] === h);
-      // Migrate legacy wide sheet → slim CNE/NomComplet/Filiere/Score, sorted.
-      if (!headerOk) {
-        await rewriteConfirmationsSheet(c.confirmationList);
-        c.confirmationList = sortConfirmationsByFiliereThenScore(
-          c.confirmationList,
-        );
+      // Only migrate headers when sheet is empty or header row alone —
+      // never rewrite a populated sheet from a refresh (race risk on Vercel).
+      if (!headerOk && conf.confirmationCount === 0) {
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: sheetId,
+          range: `${SHEET_CONFIRMATIONS}!A1`,
+          valueInputOption: "RAW",
+          requestBody: { values: [expected] },
+        });
       }
     })().finally(() => {
       confReloadPromise = null;
@@ -694,7 +697,8 @@ export async function appendConfirmation(
       }),
     });
 
-    // 2) Append only (does not wipe other agents' rows if they write at the same time).
+    // 2) Append only — never clear/rewrite the whole sheet here.
+    // Concurrent agents on Vercel used to race: clear+rewrite wiped other rows.
     await ensureWorkbookReady();
     const { sheets, sheetId } = getSheets();
     await sheets.spreadsheets.values.append({
@@ -714,24 +718,22 @@ export async function appendConfirmation(
       throw new Error("Confirmation non enregistrée. Réessayez.");
     }
     if (winner.Agent && winner.Agent !== agent) {
-      // Someone else confirmed first — clean duplicates then block this agent.
-      const cleaned = dedupeConfirmationsByCne(c.confirmationList);
-      await rewriteConfirmationsSheet(cleaned);
-      c.confirmationList = sortConfirmationsByFiliereThenScore(cleaned);
-      c.confirmationCount = cleaned.length;
+      // Someone else confirmed first — keep sheet as-is (append-only).
       throw new Error(alreadyConfirmedMessage(winner));
     }
 
-    // 4) Rewrite sorted + deduped (one row per CNE, grouped by filière).
-    const cleaned = dedupeConfirmationsByCne(c.confirmationList);
-    // Ensure our row is present (in case index kept an older empty Agent).
-    if (!cleaned.some((r) => normCode(r.CNE) === needle)) {
-      cleaned.push(saved);
-    }
-    await rewriteConfirmationsSheet(cleaned);
+    // 4) Update RAM only (Sheet already has the append). Dedup/sort is admin-side.
     c.confirmationsByCode.set(needle, winner.Agent ? winner : saved);
-    c.confirmationList = sortConfirmationsByFiliereThenScore(cleaned);
-    c.confirmationCount = cleaned.length;
+    if (!c.confirmationList.some((r) => normCode(r.CNE || r.Code || "") === needle)) {
+      c.confirmationList = sortConfirmationsByFiliereThenScore([
+        ...c.confirmationList,
+        winner.Agent ? winner : saved,
+      ]);
+      c.confirmationCount = c.confirmationList.length;
+    } else {
+      c.confirmationList = sortConfirmationsByFiliereThenScore(c.confirmationList);
+      c.confirmationCount = c.confirmationList.length;
+    }
   } finally {
     confirmingCodes.delete(needle);
   }
