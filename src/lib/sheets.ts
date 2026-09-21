@@ -43,9 +43,21 @@ let studentsReloadPromise: Promise<void> | null = null;
 let studentsFetchedAt = 0;
 let confirmationsFetchedAt = 0;
 const confirmingCodes = new Set<string>();
-const STUDENTS_TTL_MS = 30_000;
-/** Soft TTL — avoid hammering Sheets on every Massar lookup under load. */
-const CONFIRMATIONS_TTL_MS = 5_000;
+/** Student DB almost never changes during confirmation day — long TTL. */
+const STUDENTS_TTL_MS = 10 * 60_000;
+/** Confirmations soft-read TTL — append still writes; avoid read storms. */
+const CONFIRMATIONS_TTL_MS = 60_000;
+/** After a read quota hit, serve RAM only for this window. */
+let readCooldownUntil = 0;
+
+function underReadCooldown(): boolean {
+  return Date.now() < readCooldownUntil;
+}
+
+function tripReadCooldown(seconds = 90) {
+  readCooldownUntil = Date.now() + seconds * 1000;
+  console.warn(`[sheets] read cooldown ${seconds}s (quota)`);
+}
 
 function isQuotaError(e: unknown): boolean {
   const msg = e instanceof Error ? e.message : String(e);
@@ -504,6 +516,9 @@ export async function getCache(): Promise<SheetCache> {
     warmPromise = loadCacheFromSheets()
       .then((c) => {
         cache = c;
+        const now = Date.now();
+        studentsFetchedAt = now;
+        confirmationsFetchedAt = now;
         return c;
       })
       .finally(() => {
@@ -612,22 +627,31 @@ export async function refreshStudents(options?: {
     !force &&
     cache &&
     cache.etudiantCount > 0 &&
-    Date.now() - studentsFetchedAt < STUDENTS_TTL_MS
+    (underReadCooldown() ||
+      Date.now() - studentsFetchedAt < STUDENTS_TTL_MS)
   ) {
     return;
   }
 
   if (!studentsReloadPromise) {
     studentsReloadPromise = (async () => {
-      const loaded = await loadEtudiantsPartsFromSheets();
-      const c = await getCache();
-      c.etudiantsByCode = loaded.etud.etudiantsByCode;
-      c.etudiantCount = loaded.etud.etudiantCount;
-      c.parFiliere = loaded.etud.parFiliere;
-      c.filiereSheets = loaded.filiereSheets;
-      c.agentsByName = loaded.agents.agentsByName;
-      c.agentsList = loaded.agents.agentsList;
-      studentsFetchedAt = Date.now();
+      try {
+        const loaded = await loadEtudiantsPartsFromSheets();
+        const c = await getCache();
+        c.etudiantsByCode = loaded.etud.etudiantsByCode;
+        c.etudiantCount = loaded.etud.etudiantCount;
+        c.parFiliere = loaded.etud.parFiliere;
+        c.filiereSheets = loaded.filiereSheets;
+        c.agentsByName = loaded.agents.agentsByName;
+        c.agentsList = loaded.agents.agentsList;
+        studentsFetchedAt = Date.now();
+      } catch (e) {
+        if (isQuotaError(e)) {
+          tripReadCooldown();
+          if (cache && cache.etudiantCount > 0) return;
+        }
+        throw e;
+      }
     })().finally(() => {
       studentsReloadPromise = null;
     });
@@ -665,31 +689,43 @@ export async function refreshConfirmations(options?: {
     !force &&
     cache &&
     confirmationsFetchedAt > 0 &&
-    Date.now() - confirmationsFetchedAt < CONFIRMATIONS_TTL_MS
+    (underReadCooldown() ||
+      Date.now() - confirmationsFetchedAt < CONFIRMATIONS_TTL_MS)
   ) {
+    return;
+  }
+  // Under quota cooldown with any RAM — skip Sheet GET entirely.
+  if (!force && underReadCooldown() && cache) {
     return;
   }
 
   if (!confReloadPromise) {
     confReloadPromise = (async () => {
-      await ensureWorkbookReady();
-      const { sheets, sheetId } = getSheets();
-      const res = await withSheetsRetry("confirmations.get", () =>
-        sheets.spreadsheets.values.get({
-          spreadsheetId: sheetId,
-          range: `${SHEET_CONFIRMATIONS}!A:Z`,
-        }),
-      );
-      const raw = (res.data.values || []).map((r) => r.map(String));
-      const conf = buildConfirmationsIndex(raw);
-      const c = await getCache();
-      c.confirmationsByCode = conf.confirmationsByCode;
-      c.confirmationCount = conf.confirmationCount;
-      c.confirmationList = sortConfirmationsByFiliereThenScore(
-        conf.confirmationList,
-      );
-      confirmationsFetchedAt = Date.now();
-      // Never write to Confirmations from a refresh — append-only confirms only.
+      try {
+        await ensureWorkbookReady();
+        const { sheets, sheetId } = getSheets();
+        const res = await withSheetsRetry("confirmations.get", () =>
+          sheets.spreadsheets.values.get({
+            spreadsheetId: sheetId,
+            range: `${SHEET_CONFIRMATIONS}!A:Z`,
+          }),
+        );
+        const raw = (res.data.values || []).map((r) => r.map(String));
+        const conf = buildConfirmationsIndex(raw);
+        const c = await getCache();
+        c.confirmationsByCode = conf.confirmationsByCode;
+        c.confirmationCount = conf.confirmationCount;
+        c.confirmationList = sortConfirmationsByFiliereThenScore(
+          conf.confirmationList,
+        );
+        confirmationsFetchedAt = Date.now();
+      } catch (e) {
+        if (isQuotaError(e)) {
+          tripReadCooldown();
+          if (cache && confirmationsFetchedAt > 0) return;
+        }
+        throw e;
+      }
     })().finally(() => {
       confReloadPromise = null;
     });
@@ -706,21 +742,17 @@ function alreadyConfirmedMessage(row: StudentRow): string {
 }
 
 export async function getEtudiantsByCode(code: string): Promise<StudentRow[]> {
+  // Warm once into RAM — do not re-read Sheets on every search (quota).
   const c = await getCache();
-  // Empty cache after wipe/import on another instance → pull from Sheets.
   if (c.etudiantCount === 0) {
     await refreshStudents({ force: true });
-  } else {
-    await refreshStudents();
   }
   const latest = await getCache();
   return latest.etudiantsByCode.get(normCode(code)) ?? [];
 }
 
 /**
- * Typeahead while agents type a Massar code — RAM only (soft student TTL).
- * Starts after 3 characters to keep matches useful under load.
- * Marks already-confirmed students so the UI can block selecting them.
+ * Typeahead — RAM only. No Sheets GET (was burning read quota on every keystroke).
  */
 export async function suggestEtudiantsByCodePrefix(
   prefix: string,
@@ -737,18 +769,16 @@ export async function suggestEtudiantsByCodePrefix(
   const needle = normCode(prefix);
   if (needle.length < 3) return [];
 
-  const c = await getCache();
-  if (c.etudiantCount === 0) {
-    await refreshStudents({ force: true });
-  } else {
-    await refreshStudents({ force: false });
+  let latest = await getCache();
+  if (latest.etudiantCount === 0) {
+    try {
+      await refreshStudents({ force: true });
+      latest = await getCache();
+    } catch (e) {
+      if (!isQuotaError(e)) throw e;
+      return [];
+    }
   }
-  try {
-    await refreshConfirmations({ force: false });
-  } catch (e) {
-    if (!isQuotaError(e)) throw e;
-  }
-  const latest = await getCache();
 
   const matches: {
     Code: string;

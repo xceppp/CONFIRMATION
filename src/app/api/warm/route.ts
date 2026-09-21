@@ -1,20 +1,17 @@
 import { NextResponse } from "next/server";
 import { isAuthenticated } from "@/lib/auth";
-import {
-  getCache,
-  refreshConfirmations,
-  refreshStudents,
-} from "@/lib/sheets";
+import { getCache, refreshConfirmations, refreshStudents } from "@/lib/sheets";
 
-/** Prefetch Sheets into RAM so searches stay instant. */
+/** Prefetch Sheets into RAM so searches stay instant. Soft — no force re-read. */
 export async function POST() {
   if (!(await isAuthenticated())) {
     return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
   }
 
   try {
-    await refreshStudents({ force: true });
-    await refreshConfirmations();
+    await getCache();
+    await refreshStudents({ force: false });
+    await refreshConfirmations({ force: false });
     const c = await getCache();
     return NextResponse.json({
       ok: true,

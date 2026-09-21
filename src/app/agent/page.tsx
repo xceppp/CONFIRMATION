@@ -71,10 +71,10 @@ export default function AgentPage() {
       .catch(() => undefined);
   }, [router]);
 
-  // Live name suggestions while typing Massar (after 3 chars).
+  // Live name suggestions while typing Massar (after 4 chars) — RAM only server-side.
   useEffect(() => {
     const value = code.trim();
-    if (value.length < 3) {
+    if (value.length < 4) {
       setSuggestions([]);
       setShowSuggestions(false);
       return;
@@ -94,7 +94,7 @@ export default function AgentPage() {
           if (seq !== suggestSeq.current) return;
           setSuggestions([]);
         });
-    }, 220);
+    }, 400);
 
     return () => clearTimeout(t);
   }, [code]);
@@ -311,7 +311,7 @@ export default function AgentPage() {
           </div>
         </label>
         <p className="mt-2 text-xs text-[var(--muted)]">
-          En tapant le code, les noms correspondants apparaissent (à partir de 3
+          En tapant le code, les noms correspondants apparaissent (à partir de 4
           caractères).
         </p>
       </form>
