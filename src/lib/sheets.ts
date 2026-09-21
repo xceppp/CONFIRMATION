@@ -717,6 +717,40 @@ export async function getEtudiantsByCode(code: string): Promise<StudentRow[]> {
   return latest.etudiantsByCode.get(normCode(code)) ?? [];
 }
 
+/**
+ * Typeahead while agents type a Massar code — RAM only (soft student TTL).
+ * Starts after 3 characters to keep matches useful under load.
+ */
+export async function suggestEtudiantsByCodePrefix(
+  prefix: string,
+  limit = 8,
+): Promise<{ Code: string; NomFr: string; PrenomFr: string }[]> {
+  const needle = normCode(prefix);
+  if (needle.length < 3) return [];
+
+  const c = await getCache();
+  if (c.etudiantCount === 0) {
+    await refreshStudents({ force: true });
+  } else {
+    await refreshStudents({ force: false });
+  }
+  const latest = await getCache();
+
+  const matches: { Code: string; NomFr: string; PrenomFr: string }[] = [];
+  for (const [code, rows] of latest.etudiantsByCode) {
+    if (!code.startsWith(needle)) continue;
+    const first = rows[0];
+    matches.push({
+      Code: code,
+      NomFr: first?.NomFr || "",
+      PrenomFr: first?.PrenomFr || "",
+    });
+  }
+
+  matches.sort((a, b) => a.Code.localeCompare(b.Code));
+  return matches.slice(0, Math.max(1, Math.min(limit, 15)));
+}
+
 /** Check Confirmations — soft TTL to spare quota; force on confirm write path. */
 export async function isAlreadyConfirmed(
   code: string,

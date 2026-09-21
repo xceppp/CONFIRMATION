@@ -1,12 +1,18 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 type FiliereOption = {
   FiliereCode: string;
   Filiere: string;
   Score: string;
+};
+
+type Suggestion = {
+  Code: string;
+  NomFr: string;
+  PrenomFr: string;
 };
 
 type SearchResult = {
@@ -44,6 +50,10 @@ export default function AgentPage() {
   const [success, setSuccess] = useState("");
   const [result, setResult] = useState<SearchResult | null>(null);
   const [selected, setSelected] = useState("");
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const suggestSeq = useRef(0);
+  const blurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     void fetch("/api/warm", { method: "POST" });
@@ -57,6 +67,34 @@ export default function AgentPage() {
       })
       .catch(() => undefined);
   }, [router]);
+
+  // Live name suggestions while typing Massar (after 3 chars).
+  useEffect(() => {
+    const value = code.trim();
+    if (value.length < 3) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+
+    const seq = ++suggestSeq.current;
+    const t = setTimeout(() => {
+      void fetch(`/api/students?prefix=${encodeURIComponent(value)}`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (seq !== suggestSeq.current) return;
+          const list = Array.isArray(data.suggestions) ? data.suggestions : [];
+          setSuggestions(list);
+          setShowSuggestions(list.length > 0);
+        })
+        .catch(() => {
+          if (seq !== suggestSeq.current) return;
+          setSuggestions([]);
+        });
+    }, 220);
+
+    return () => clearTimeout(t);
+  }, [code]);
 
   const canConfirm = useMemo(
     () =>
@@ -75,14 +113,16 @@ export default function AgentPage() {
     router.refresh();
   }
 
-  async function search(e?: FormEvent) {
+  async function search(e?: FormEvent, overrideCode?: string) {
     e?.preventDefault();
     setError("");
     setSuccess("");
     setResult(null);
     setSelected("");
-    const value = code.trim();
+    setShowSuggestions(false);
+    const value = (overrideCode ?? code).trim();
     if (!value) return;
+    if (overrideCode) setCode(overrideCode.toUpperCase());
 
     setLoading(true);
     try {
@@ -101,6 +141,12 @@ export default function AgentPage() {
     } finally {
       setLoading(false);
     }
+  }
+
+  function pickSuggestion(s: Suggestion) {
+    setShowSuggestions(false);
+    setSuggestions([]);
+    void search(undefined, s.Code);
   }
 
   async function confirm() {
@@ -140,6 +186,7 @@ export default function AgentPage() {
       setResult(null);
       setSelected("");
       setCode("");
+      setSuggestions([]);
     } catch {
       setError("Erreur réseau. Réessayez.");
     } finally {
@@ -180,13 +227,52 @@ export default function AgentPage() {
         <label className="block">
           <span className="mb-1.5 block text-sm font-medium">Code Massar</span>
           <div className="flex flex-col gap-3 sm:flex-row">
-            <input
-              value={code}
-              onChange={(e) => setCode(e.target.value.toUpperCase())}
-              placeholder="Ex: G134724194"
-              className="flex-1 rounded-xl border border-[var(--line)] bg-white px-4 py-3 text-lg tracking-wide outline-none ring-[var(--brand)] focus:ring-2"
-              autoFocus
-            />
+            <div className="relative flex-1">
+              <input
+                value={code}
+                onChange={(e) => {
+                  setCode(e.target.value.toUpperCase());
+                  setResult(null);
+                  setSelected("");
+                  setSuccess("");
+                }}
+                onFocus={() => {
+                  if (suggestions.length > 0) setShowSuggestions(true);
+                }}
+                onBlur={() => {
+                  if (blurTimer.current) clearTimeout(blurTimer.current);
+                  blurTimer.current = setTimeout(
+                    () => setShowSuggestions(false),
+                    150,
+                  );
+                }}
+                placeholder="Ex: G134724194"
+                className="w-full rounded-xl border border-[var(--line)] bg-white px-4 py-3 text-lg tracking-wide outline-none ring-[var(--brand)] focus:ring-2"
+                autoFocus
+                autoComplete="off"
+              />
+              {showSuggestions && suggestions.length > 0 ? (
+                <ul className="absolute z-20 mt-1 max-h-64 w-full overflow-auto rounded-xl border border-[var(--line)] bg-white py-1 shadow-[0_12px_32px_rgba(28,42,36,0.12)]">
+                  {suggestions.map((s) => (
+                    <li key={s.Code}>
+                      <button
+                        type="button"
+                        className="flex w-full flex-col items-start gap-0.5 px-4 py-2.5 text-left hover:bg-[#e8f4f0]"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => pickSuggestion(s)}
+                      >
+                        <span className="font-semibold tracking-wide">
+                          {s.Code}
+                        </span>
+                        <span className="text-sm text-[var(--muted)]">
+                          {s.PrenomFr} {s.NomFr}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
             <button
               type="submit"
               disabled={loading}
@@ -196,6 +282,10 @@ export default function AgentPage() {
             </button>
           </div>
         </label>
+        <p className="mt-2 text-xs text-[var(--muted)]">
+          En tapant le code, les noms correspondants apparaissent (à partir de 3
+          caractères).
+        </p>
       </form>
 
       {error ? (

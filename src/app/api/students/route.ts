@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { isAuthenticated } from "@/lib/auth";
-import { getEtudiantsByCode, isAlreadyConfirmed } from "@/lib/sheets";
+import {
+  getEtudiantsByCode,
+  isAlreadyConfirmed,
+  suggestEtudiantsByCodePrefix,
+} from "@/lib/sheets";
 
 export async function GET(request: Request) {
   if (!(await isAuthenticated())) {
@@ -8,7 +12,19 @@ export async function GET(request: Request) {
   }
 
   const { searchParams } = new URL(request.url);
+  const prefix = (searchParams.get("prefix") || "").trim();
   const code = (searchParams.get("code") || "").trim();
+
+  // Live suggestions while typing Massar (no confirmations GET — spare quota).
+  if (prefix) {
+    try {
+      const suggestions = await suggestEtudiantsByCodePrefix(prefix, 8);
+      return NextResponse.json({ suggestions });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Erreur serveur";
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
+  }
 
   if (!code) {
     return NextResponse.json(
