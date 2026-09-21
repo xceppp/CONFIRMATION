@@ -30,6 +30,46 @@ export function getFiliereByCode(code: string): Filiere | undefined {
   return FILIERES.find((f) => f.code.toUpperCase() === code.toUpperCase());
 }
 
+/** Strip accents / case for fuzzy filière name compare. */
+export function normalizeFiliereText(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Map a Confirmations "Filiere" cell (code or full name) to a known filière.
+ * Uses whole-token code match (longest first) — never naive includes("GI")
+ * which falsely matched "IntelliGIence…" as GI instead of IATE.
+ */
+export function resolveFiliereFromLabel(label: string): Filiere | undefined {
+  const raw = String(label || "").trim();
+  if (!raw || raw === "—") return undefined;
+
+  const upper = raw.toUpperCase();
+  const exactCode = FILIERES.find((f) => f.code === upper);
+  if (exactCode) return exactCode;
+
+  const byLen = [...FILIERES].sort((a, b) => b.code.length - a.code.length);
+  for (const f of byLen) {
+    const re = new RegExp(`(^|[^A-Z0-9])${f.code}([^A-Z0-9]|$)`, "i");
+    if (re.test(raw)) return f;
+  }
+
+  const norm = normalizeFiliereText(raw);
+  for (const f of FILIERES) {
+    if (normalizeFiliereText(f.name) === norm) return f;
+  }
+  for (const f of FILIERES) {
+    const nn = normalizeFiliereText(f.name);
+    if (nn && (norm.includes(nn) || nn.includes(norm))) return f;
+  }
+  return undefined;
+}
+
 /**
  * Détecte le code filière dans le nom du fichier
  * (ex: "liste-attente-selection FBA.csv" → FBA).

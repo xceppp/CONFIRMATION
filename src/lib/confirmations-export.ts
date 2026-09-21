@@ -1,5 +1,6 @@
 import type { StudentRow } from "./columns";
 import { CONFIRMATIONS_HEADERS } from "./columns";
+import { resolveFiliereFromLabel } from "./filieres";
 
 export type ExportColumn = {
   key: string;
@@ -88,17 +89,15 @@ export function cellValue(row: StudentRow, key: string): string {
 export function rowMatchesFiliere(
   row: StudentRow,
   code: string,
-  name: string,
+  _name: string,
 ): boolean {
-  const label = String(row.Filiere || "").trim();
-  const rowCode = String(row.FiliereCode || "").trim().toUpperCase();
   const c = code.trim().toUpperCase();
-  const n = name.trim();
+  const rowCode = String(row.FiliereCode || "").trim().toUpperCase();
   if (rowCode && rowCode === c) return true;
-  if (label.toUpperCase() === c) return true;
-  if (n && label.toLowerCase() === n.toLowerCase()) return true;
-  if (n && label.toLowerCase().includes(n.toLowerCase())) return true;
-  return false;
+
+  const label = String(row.Filiere || row.FiliereCode || "").trim();
+  const resolved = resolveFiliereFromLabel(label);
+  return Boolean(resolved && resolved.code === c);
 }
 
 /**

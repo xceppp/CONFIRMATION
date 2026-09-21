@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { FILIERES } from "@/lib/filieres";
+import { FILIERES, resolveFiliereFromLabel } from "@/lib/filieres";
 
 type ConfCounts = Record<string, number>;
 
@@ -29,17 +29,22 @@ export default function AdminFinalPage() {
       }
       const counts: ConfCounts = {};
       for (const f of FILIERES) counts[f.code] = 0;
-      for (const g of data.groups || []) {
-        const label = String(g.filiere || "");
-        const match = FILIERES.find(
-          (f) =>
-            f.name.toLowerCase() === label.toLowerCase() ||
-            f.code.toLowerCase() === label.toLowerCase() ||
-            label.toLowerCase().includes(f.name.toLowerCase()) ||
-            label.toUpperCase().includes(f.code),
-        );
-        if (match) {
-          counts[match.code] = (counts[match.code] || 0) + Number(g.count || 0);
+
+      // Prefer row-level resolve (avoids GI matching inside "Intelligence…").
+      const rows = Array.isArray(data.rows) ? data.rows : [];
+      if (rows.length > 0) {
+        for (const row of rows) {
+          const label = String(row.Filiere || row.FiliereCode || "");
+          const match = resolveFiliereFromLabel(label);
+          if (match) counts[match.code] = (counts[match.code] || 0) + 1;
+        }
+      } else {
+        for (const g of data.groups || []) {
+          const match = resolveFiliereFromLabel(String(g.filiere || ""));
+          if (match) {
+            counts[match.code] =
+              (counts[match.code] || 0) + Number(g.count || 0);
+          }
         }
       }
       setConfirmedByCode(counts);
