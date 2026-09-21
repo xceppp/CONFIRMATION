@@ -720,11 +720,20 @@ export async function getEtudiantsByCode(code: string): Promise<StudentRow[]> {
 /**
  * Typeahead while agents type a Massar code — RAM only (soft student TTL).
  * Starts after 3 characters to keep matches useful under load.
+ * Marks already-confirmed students so the UI can block selecting them.
  */
 export async function suggestEtudiantsByCodePrefix(
   prefix: string,
   limit = 8,
-): Promise<{ Code: string; NomFr: string; PrenomFr: string }[]> {
+): Promise<
+  {
+    Code: string;
+    NomFr: string;
+    PrenomFr: string;
+    alreadyConfirmed: boolean;
+    Filiere?: string;
+  }[]
+> {
   const needle = normCode(prefix);
   if (needle.length < 3) return [];
 
@@ -734,16 +743,30 @@ export async function suggestEtudiantsByCodePrefix(
   } else {
     await refreshStudents({ force: false });
   }
+  try {
+    await refreshConfirmations({ force: false });
+  } catch (e) {
+    if (!isQuotaError(e)) throw e;
+  }
   const latest = await getCache();
 
-  const matches: { Code: string; NomFr: string; PrenomFr: string }[] = [];
+  const matches: {
+    Code: string;
+    NomFr: string;
+    PrenomFr: string;
+    alreadyConfirmed: boolean;
+    Filiere?: string;
+  }[] = [];
   for (const [code, rows] of latest.etudiantsByCode) {
     if (!code.startsWith(needle)) continue;
     const first = rows[0];
+    const conf = latest.confirmationsByCode.get(code);
     matches.push({
       Code: code,
       NomFr: first?.NomFr || "",
       PrenomFr: first?.PrenomFr || "",
+      alreadyConfirmed: Boolean(conf),
+      Filiere: conf?.Filiere || conf?.FiliereCode || undefined,
     });
   }
 

@@ -13,6 +13,8 @@ type Suggestion = {
   Code: string;
   NomFr: string;
   PrenomFr: string;
+  alreadyConfirmed?: boolean;
+  Filiere?: string;
 };
 
 type SearchResult = {
@@ -54,6 +56,7 @@ export default function AgentPage() {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const suggestSeq = useRef(0);
   const blurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const codeInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     void fetch("/api/warm", { method: "POST" });
@@ -144,9 +147,17 @@ export default function AgentPage() {
   }
 
   function pickSuggestion(s: Suggestion) {
+    if (s.alreadyConfirmed) return;
     setShowSuggestions(false);
     setSuggestions([]);
     void search(undefined, s.Code);
+  }
+
+  function focusCodeInput() {
+    requestAnimationFrame(() => {
+      codeInputRef.current?.focus();
+      codeInputRef.current?.select();
+    });
   }
 
   async function confirm() {
@@ -187,6 +198,8 @@ export default function AgentPage() {
       setSelected("");
       setCode("");
       setSuggestions([]);
+      setShowSuggestions(false);
+      focusCodeInput();
     } catch {
       setError("Erreur réseau. Réessayez.");
     } finally {
@@ -229,6 +242,7 @@ export default function AgentPage() {
           <div className="flex flex-col gap-3 sm:flex-row">
             <div className="relative flex-1">
               <input
+                ref={codeInputRef}
                 value={code}
                 onChange={(e) => {
                   setCode(e.target.value.toUpperCase());
@@ -253,23 +267,37 @@ export default function AgentPage() {
               />
               {showSuggestions && suggestions.length > 0 ? (
                 <ul className="absolute z-20 mt-1 max-h-64 w-full overflow-auto rounded-xl border border-[var(--line)] bg-white py-1 shadow-[0_12px_32px_rgba(28,42,36,0.12)]">
-                  {suggestions.map((s) => (
-                    <li key={s.Code}>
-                      <button
-                        type="button"
-                        className="flex w-full flex-col items-start gap-0.5 px-4 py-2.5 text-left hover:bg-[#e8f4f0]"
-                        onMouseDown={(e) => e.preventDefault()}
-                        onClick={() => pickSuggestion(s)}
-                      >
-                        <span className="font-semibold tracking-wide">
-                          {s.Code}
-                        </span>
-                        <span className="text-sm text-[var(--muted)]">
-                          {s.PrenomFr} {s.NomFr}
-                        </span>
-                      </button>
-                    </li>
-                  ))}
+                  {suggestions.map((s) => {
+                    const locked = Boolean(s.alreadyConfirmed);
+                    return (
+                      <li key={s.Code}>
+                        <button
+                          type="button"
+                          disabled={locked}
+                          className={`flex w-full flex-col items-start gap-0.5 px-4 py-2.5 text-left ${
+                            locked
+                              ? "cursor-not-allowed bg-amber-50/80 opacity-70"
+                              : "hover:bg-[#e8f4f0]"
+                          }`}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => pickSuggestion(s)}
+                        >
+                          <span className="font-semibold tracking-wide">
+                            {s.Code}
+                          </span>
+                          <span className="text-sm text-[var(--muted)]">
+                            {s.PrenomFr} {s.NomFr}
+                          </span>
+                          {locked ? (
+                            <span className="text-xs font-semibold text-amber-800">
+                              Déjà confirmé
+                              {s.Filiere ? ` — ${s.Filiere}` : ""}
+                            </span>
+                          ) : null}
+                        </button>
+                      </li>
+                    );
+                  })}
                 </ul>
               ) : null}
             </div>
