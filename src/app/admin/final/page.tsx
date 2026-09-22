@@ -5,12 +5,50 @@ import { FILIERES, resolveFiliereFromLabel } from "@/lib/filieres";
 
 type ConfCounts = Record<string, number>;
 
+const PLACES_STORAGE_KEY = "admin-final-places";
+
+/** Default Places (N) — used until the admin edits (then remembered locally). */
+const DEFAULT_PLACES: Record<string, string> = {
+  DWM: "48",
+  FBA: "58",
+  GC: "48",
+  GETE: "73",
+  GI: "92",
+  GTE: "84",
+  IATE: "48",
+  PMD: "58",
+  TCC: "55",
+  TM: "44",
+};
+
+function emptyPlaces(): Record<string, string> {
+  const init: Record<string, string> = {};
+  for (const f of FILIERES) init[f.code] = DEFAULT_PLACES[f.code] ?? "";
+  return init;
+}
+
+function loadSavedPlaces(): Record<string, string> {
+  const init = emptyPlaces();
+  try {
+    const raw = localStorage.getItem(PLACES_STORAGE_KEY);
+    if (!raw) return init;
+    const saved = JSON.parse(raw) as Record<string, unknown>;
+    if (!saved || typeof saved !== "object") return init;
+    for (const f of FILIERES) {
+      const v = saved[f.code];
+      if (v != null && String(v).trim() !== "") {
+        init[f.code] = String(v);
+      }
+    }
+  } catch {
+    /* ignore corrupt storage */
+  }
+  return init;
+}
+
 export default function AdminFinalPage() {
-  const [places, setPlaces] = useState<Record<string, string>>(() => {
-    const init: Record<string, string> = {};
-    for (const f of FILIERES) init[f.code] = "";
-    return init;
-  });
+  const [places, setPlaces] = useState<Record<string, string>>(emptyPlaces);
+  const [placesHydrated, setPlacesHydrated] = useState(false);
   const [confirmedByCode, setConfirmedByCode] = useState<ConfCounts>({});
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState<"excel" | "pdf" | null>(null);
@@ -55,8 +93,19 @@ export default function AdminFinalPage() {
   }
 
   useEffect(() => {
+    setPlaces(loadSavedPlaces());
+    setPlacesHydrated(true);
     void loadCounts();
   }, []);
+
+  useEffect(() => {
+    if (!placesHydrated) return;
+    try {
+      localStorage.setItem(PLACES_STORAGE_KEY, JSON.stringify(places));
+    } catch {
+      /* quota / private mode */
+    }
+  }, [places, placesHydrated]);
 
   const filledCount = useMemo(
     () =>
@@ -130,8 +179,9 @@ export default function AdminFinalPage() {
             Final
           </h2>
           <p className="mt-1 max-w-2xl text-[var(--muted)]">
-            Indiquez le nombre de places par filière. L&apos;export prend les
-            confirmés classés par score (du plus élevé) — ce sont les{" "}
+            Indiquez le nombre de places par filière (valeurs mémorisées et
+            modifiables). L&apos;export prend les confirmés classés par score
+            (du plus élevé) — ce sont les{" "}
             <strong className="font-semibold text-[var(--ink)]">admis</strong>{" "}
             à procéder à l&apos;inscription. Excel pour le local, PDF pour la
             publication.
