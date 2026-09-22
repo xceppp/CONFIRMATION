@@ -7,6 +7,7 @@ import {
   selectTopConfirmationsByPlaces,
 } from "@/lib/confirmations-export";
 import { buildFinalSelectionPdf } from "@/lib/confirmations-pdf";
+import { parseNouveauxInscritsBuffer } from "@/lib/inscrits-parse";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -22,20 +23,11 @@ const COLUMNS = [
   { key: "DateConfirmation", label: "Date confirmation" },
 ] as const;
 
-function parsePlaces(body: unknown): {
+function parsePlacesFromObject(placesRaw: Record<string, unknown>): {
   code: string;
   name: string;
   places: number;
 }[] {
-  const placesRaw =
-    body &&
-    typeof body === "object" &&
-    "places" in body &&
-    body.places &&
-    typeof body.places === "object"
-      ? (body.places as Record<string, unknown>)
-      : {};
-
   return FILIERES.map((f) => {
     const raw = placesRaw[f.code] ?? placesRaw[f.code.toLowerCase()] ?? "";
     const n = Number.parseInt(String(raw).trim(), 10);
@@ -45,6 +37,54 @@ function parsePlaces(body: unknown): {
       places: Number.isFinite(n) && n > 0 ? n : 0,
     };
   }).filter((f) => f.places > 0);
+}
+
+async function readRequest(request: Request): Promise<{
+  format: "excel" | "pdf";
+  placesByCode: { code: string; name: string; places: number }[];
+  inscritsBuffer: Buffer | null;
+}> {
+  const ctype = request.headers.get("content-type") || "";
+  if (ctype.includes("multipart/form-data")) {
+    const form = await request.formData();
+    const format =
+      String(form.get("format") || "excel").toLowerCase() === "pdf"
+        ? "pdf"
+        : "excel";
+    let placesRaw: Record<string, unknown> = {};
+    const placesJson = form.get("places");
+    if (typeof placesJson === "string") {
+      try {
+        placesRaw = JSON.parse(placesJson) as Record<string, unknown>;
+      } catch {
+        placesRaw = {};
+      }
+    }
+    let inscritsBuffer: Buffer | null = null;
+    const file = form.get("inscrits");
+    if (file && typeof file === "object" && "arrayBuffer" in file) {
+      const ab = await (file as File).arrayBuffer();
+      inscritsBuffer = Buffer.from(ab);
+    }
+    return {
+      format,
+      placesByCode: parsePlacesFromObject(placesRaw),
+      inscritsBuffer,
+    };
+  }
+
+  const body = await request.json().catch(() => null);
+  const format =
+    String(body?.format || "excel").toLowerCase() === "pdf" ? "pdf" : "excel";
+  const placesRaw =
+    body?.places && typeof body.places === "object"
+      ? (body.places as Record<string, unknown>)
+      : {};
+  return {
+    format,
+    placesByCode: parsePlacesFromObject(placesRaw),
+    inscritsBuffer: null,
+  };
 }
 
 async function buildExcel(
@@ -153,17 +193,14 @@ async function buildExcel(
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
-/** Final: top-N admitted for inscription — Excel (local) or PDF (publish). */
+/** Final: top-N admitted — Excel or PDF (split déjà inscrits on PDF). */
 export async function POST(request: Request) {
   if (!(await requireAdmin())) {
     return NextResponse.json({ error: "Accès admin refusé" }, { status: 403 });
   }
 
   try {
-    const body = await request.json().catch(() => null);
-    const format =
-      String(body?.format || "excel").toLowerCase() === "pdf" ? "pdf" : "excel";
-    const placesByCode = parsePlaces(body);
+    const { format, placesByCode, inscritsBuffer } = await readRequest(request);
 
     if (placesByCode.length === 0) {
       return NextResponse.json(
@@ -184,12 +221,16 @@ export async function POST(request: Request) {
     const stamp = new Date().toISOString().slice(0, 10);
 
     if (format === "pdf") {
+      const deja = inscritsBuffer
+        ? await parseNouveauxInscritsBuffer(inscritsBuffer)
+        : null;
       const buffer = await buildFinalSelectionPdf(
         selected.map((g) => ({
           code: g.code,
           name: g.name,
           rows: g.rows,
         })),
+        deja,
       );
       return new NextResponse(new Uint8Array(buffer), {
         status: 200,
