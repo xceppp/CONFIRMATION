@@ -15,12 +15,11 @@ const LINE = "#c5d4d0";
 const HEADER_BG = "#e8f4f0";
 
 const COLS = [
-  { key: "Rang", label: "N°", w: 32 },
-  { key: "CNE", label: "CNE", w: 88 },
-  { key: "NomComplet", label: "Nom complet", w: 200 },
-  { key: "Score", label: "Score", w: 52 },
-  { key: "Agent", label: "Agent", w: 70 },
-  { key: "DateConfirmation", label: "Date", w: 81 },
+  { key: "Rang", label: "N°", w: 36 },
+  { key: "CNE", label: "CNE", w: 100 },
+  { key: "NomComplet", label: "Nom complet", w: 260 },
+  { key: "Score", label: "Score", w: 60 },
+  { key: "DateConfirmation", label: "Date", w: 67 },
 ] as const;
 
 export type PdfFiliereGroup = {
@@ -233,9 +232,8 @@ export async function buildGroupedListsPdf(
       const values: Record<string, string> = {
         Rang: String(rang),
         CNE: cellValue(row, "CNE"),
-        NomComplet: cellValue(row, "NomComplet"),
+        NomComplet: cellValue(row, "NomComplet").toUpperCase(),
         Score: cellValue(row, "Score"),
-        Agent: cellValue(row, "Agent"),
         DateConfirmation: cellValue(row, "DateConfirmation"),
       };
 
