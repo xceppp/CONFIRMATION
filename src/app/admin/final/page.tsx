@@ -13,7 +13,7 @@ export default function AdminFinalPage() {
   });
   const [confirmedByCode, setConfirmedByCode] = useState<ConfCounts>({});
   const [loading, setLoading] = useState(true);
-  const [exporting, setExporting] = useState(false);
+  const [exporting, setExporting] = useState<"excel" | "pdf" | null>(null);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
 
@@ -30,7 +30,6 @@ export default function AdminFinalPage() {
       const counts: ConfCounts = {};
       for (const f of FILIERES) counts[f.code] = 0;
 
-      // Prefer row-level resolve (avoids GI matching inside "Intelligence…").
       const rows = Array.isArray(data.rows) ? data.rows : [];
       if (rows.length > 0) {
         for (const row of rows) {
@@ -68,8 +67,8 @@ export default function AdminFinalPage() {
     [places],
   );
 
-  async function doExport() {
-    setExporting(true);
+  async function doExport(format: "excel" | "pdf") {
+    setExporting(format);
     setError("");
     setInfo("");
     try {
@@ -86,7 +85,7 @@ export default function AdminFinalPage() {
       const res = await fetch("/api/admin/final/export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ places: bodyPlaces }),
+        body: JSON.stringify({ places: bodyPlaces, format }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -100,16 +99,23 @@ export default function AdminFinalPage() {
       a.download =
         res.headers
           .get("Content-Disposition")
-          ?.match(/filename="(.+)"/)?.[1] || "selection_finale.xlsx";
+          ?.match(/filename="(.+)"/)?.[1] ||
+        (format === "pdf"
+          ? "admis_inscription.pdf"
+          : "admis_inscription.xlsx");
       document.body.appendChild(a);
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-      setInfo("Export téléchargé — top scores par filière selon les places.");
+      setInfo(
+        format === "pdf"
+          ? "PDF des admis téléchargé — listes pour inscription / publication."
+          : "Excel des admis téléchargé — top scores selon les places (usage local).",
+      );
     } catch {
       setError("Erreur réseau pendant l'export.");
     } finally {
-      setExporting(false);
+      setExporting(null);
     }
   }
 
@@ -124,9 +130,11 @@ export default function AdminFinalPage() {
             Final
           </h2>
           <p className="mt-1 max-w-2xl text-[var(--muted)]">
-            Indiquez le nombre de places (espaces vides) par filière. L&apos;export
-            prend les confirmés classés par score (du plus élevé), jusqu&apos;au
-            nombre demandé pour chaque filière.
+            Indiquez le nombre de places par filière. L&apos;export prend les
+            confirmés classés par score (du plus élevé) — ce sont les{" "}
+            <strong className="font-semibold text-[var(--ink)]">admis</strong>{" "}
+            à procéder à l&apos;inscription. Excel pour le local, PDF pour la
+            publication.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -139,11 +147,19 @@ export default function AdminFinalPage() {
           </button>
           <button
             type="button"
-            disabled={exporting || filledCount === 0}
-            onClick={() => void doExport()}
+            disabled={exporting !== null || filledCount === 0}
+            onClick={() => void doExport("excel")}
             className="rounded-xl bg-[var(--brand)] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[var(--brand-dark)] disabled:opacity-50"
           >
-            {exporting ? "Export…" : "Exporter la sélection"}
+            {exporting === "excel" ? "Excel…" : "Exporter Excel"}
+          </button>
+          <button
+            type="button"
+            disabled={exporting !== null || filledCount === 0}
+            onClick={() => void doExport("pdf")}
+            className="rounded-xl bg-[var(--accent)] px-4 py-2.5 text-sm font-semibold text-white hover:brightness-95 disabled:opacity-50"
+          >
+            {exporting === "pdf" ? "PDF…" : "Exporter PDF"}
           </button>
         </div>
       </div>

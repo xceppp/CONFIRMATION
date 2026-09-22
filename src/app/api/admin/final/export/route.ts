@@ -6,9 +6,11 @@ import {
   cellValue,
   selectTopConfirmationsByPlaces,
 } from "@/lib/confirmations-export";
+import { buildFinalSelectionPdf } from "@/lib/confirmations-pdf";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
+export const maxDuration = 120;
 
 const COLUMNS = [
   { key: "Rang", label: "Rang" },
@@ -20,6 +22,138 @@ const COLUMNS = [
   { key: "DateConfirmation", label: "Date confirmation" },
 ] as const;
 
+function parsePlaces(body: unknown): {
+  code: string;
+  name: string;
+  places: number;
+}[] {
+  const placesRaw =
+    body &&
+    typeof body === "object" &&
+    "places" in body &&
+    body.places &&
+    typeof body.places === "object"
+      ? (body.places as Record<string, unknown>)
+      : {};
+
+  return FILIERES.map((f) => {
+    const raw = placesRaw[f.code] ?? placesRaw[f.code.toLowerCase()] ?? "";
+    const n = Number.parseInt(String(raw).trim(), 10);
+    return {
+      code: f.code,
+      name: f.name,
+      places: Number.isFinite(n) && n > 0 ? n : 0,
+    };
+  }).filter((f) => f.places > 0);
+}
+
+async function buildExcel(
+  selected: {
+    code: string;
+    name: string;
+    places: number;
+    rows: import("@/lib/columns").StudentRow[];
+  }[],
+  summary: {
+    code: string;
+    name: string;
+    places: number;
+    confirmed: number;
+    selected: number;
+    shortfall: number;
+  }[],
+): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Confirmation";
+
+  const resume = workbook.addWorksheet("Resume", {
+    views: [{ state: "frozen", ySplit: 1 }],
+  });
+  resume.addRow([
+    "Code",
+    "Filière",
+    "Places demandées",
+    "Confirmés",
+    "Admis",
+    "Manque",
+  ]);
+  resume.getRow(1).font = { bold: true };
+  for (const s of summary) {
+    resume.addRow([
+      s.code,
+      s.name,
+      s.places,
+      s.confirmed,
+      s.selected,
+      s.shortfall,
+    ]);
+  }
+  resume.columns.forEach((col) => {
+    col.width = 18;
+  });
+  resume.getColumn(2).width = 42;
+
+  const sheet = workbook.addWorksheet("Admis_inscription", {
+    views: [{ state: "frozen", ySplit: 1 }],
+  });
+  sheet.addRow(COLUMNS.map((c) => c.label));
+  sheet.getRow(1).font = { bold: true };
+
+  for (const group of selected) {
+    group.rows.forEach((row, i) => {
+      sheet.addRow([
+        i + 1,
+        cellValue(row, "CNE"),
+        cellValue(row, "NomComplet"),
+        cellValue(row, "Filiere") || group.name,
+        cellValue(row, "Score"),
+        cellValue(row, "Agent"),
+        cellValue(row, "DateConfirmation"),
+      ]);
+    });
+  }
+
+  sheet.columns.forEach((col) => {
+    let max = 12;
+    col.eachCell?.({ includeEmpty: true }, (cell) => {
+      const len = String(cell.value ?? "").length;
+      if (len > max) max = Math.min(len + 2, 40);
+    });
+    col.width = max;
+  });
+
+  for (const group of selected) {
+    const title = group.code.slice(0, 31);
+    const ws = workbook.addWorksheet(title, {
+      views: [{ state: "frozen", ySplit: 1 }],
+    });
+    ws.addRow(COLUMNS.map((c) => c.label));
+    ws.getRow(1).font = { bold: true };
+    group.rows.forEach((row, i) => {
+      ws.addRow([
+        i + 1,
+        cellValue(row, "CNE"),
+        cellValue(row, "NomComplet"),
+        cellValue(row, "Filiere") || group.name,
+        cellValue(row, "Score"),
+        cellValue(row, "Agent"),
+        cellValue(row, "DateConfirmation"),
+      ]);
+    });
+    ws.columns.forEach((col) => {
+      let max = 12;
+      col.eachCell?.({ includeEmpty: true }, (cell) => {
+        const len = String(cell.value ?? "").length;
+        if (len > max) max = Math.min(len + 2, 40);
+      });
+      col.width = max;
+    });
+  }
+
+  return Buffer.from(await workbook.xlsx.writeBuffer());
+}
+
+/** Final: top-N admitted for inscription — Excel (local) or PDF (publish). */
 export async function POST(request: Request) {
   if (!(await requireAdmin())) {
     return NextResponse.json({ error: "Accès admin refusé" }, { status: 403 });
@@ -27,18 +161,9 @@ export async function POST(request: Request) {
 
   try {
     const body = await request.json().catch(() => null);
-    const placesRaw =
-      body?.places && typeof body.places === "object" ? body.places : {};
-
-    const placesByCode = FILIERES.map((f) => {
-      const raw = placesRaw[f.code] ?? placesRaw[f.code.toLowerCase()] ?? "";
-      const n = Number.parseInt(String(raw).trim(), 10);
-      return {
-        code: f.code,
-        name: f.name,
-        places: Number.isFinite(n) && n > 0 ? n : 0,
-      };
-    }).filter((f) => f.places > 0);
+    const format =
+      String(body?.format || "excel").toLowerCase() === "pdf" ? "pdf" : "excel";
+    const placesByCode = parsePlaces(body);
 
     if (placesByCode.length === 0) {
       return NextResponse.json(
@@ -56,104 +181,32 @@ export async function POST(request: Request) {
       placesByCode,
     );
 
-    const workbook = new ExcelJS.Workbook();
-    workbook.creator = "Confirmation";
-
-    const resume = workbook.addWorksheet("Resume", {
-      views: [{ state: "frozen", ySplit: 1 }],
-    });
-    resume.addRow([
-      "Code",
-      "Filière",
-      "Places demandées",
-      "Confirmés",
-      "Sélectionnés",
-      "Manque",
-    ]);
-    resume.getRow(1).font = { bold: true };
-    for (const s of summary) {
-      resume.addRow([
-        s.code,
-        s.name,
-        s.places,
-        s.confirmed,
-        s.selected,
-        s.shortfall,
-      ]);
-    }
-    resume.columns.forEach((col) => {
-      col.width = 18;
-    });
-    resume.getColumn(2).width = 42;
-
-    const sheet = workbook.addWorksheet("Selection_finale", {
-      views: [{ state: "frozen", ySplit: 1 }],
-    });
-    sheet.addRow(COLUMNS.map((c) => c.label));
-    sheet.getRow(1).font = { bold: true };
-
-    for (const group of selected) {
-      group.rows.forEach((row, i) => {
-        sheet.addRow([
-          i + 1,
-          cellValue(row, "CNE"),
-          cellValue(row, "NomComplet"),
-          cellValue(row, "Filiere") || group.name,
-          cellValue(row, "Score"),
-          cellValue(row, "Agent"),
-          cellValue(row, "DateConfirmation"),
-        ]);
-      });
-    }
-
-    sheet.columns.forEach((col) => {
-      let max = 12;
-      col.eachCell?.({ includeEmpty: true }, (cell) => {
-        const len = String(cell.value ?? "").length;
-        if (len > max) max = Math.min(len + 2, 40);
-      });
-      col.width = max;
-    });
-
-    // One sheet per filière that has a selection
-    for (const group of selected) {
-      const title = group.code.slice(0, 31);
-      const ws = workbook.addWorksheet(title, {
-        views: [{ state: "frozen", ySplit: 1 }],
-      });
-      ws.addRow(COLUMNS.map((c) => c.label));
-      ws.getRow(1).font = { bold: true };
-      group.rows.forEach((row, i) => {
-        ws.addRow([
-          i + 1,
-          cellValue(row, "CNE"),
-          cellValue(row, "NomComplet"),
-          cellValue(row, "Filiere") || group.name,
-          cellValue(row, "Score"),
-          cellValue(row, "Agent"),
-          cellValue(row, "DateConfirmation"),
-        ]);
-      });
-      ws.columns.forEach((col) => {
-        let max = 12;
-        col.eachCell?.({ includeEmpty: true }, (cell) => {
-          const len = String(cell.value ?? "").length;
-          if (len > max) max = Math.min(len + 2, 40);
-        });
-        col.width = max;
-      });
-    }
-
-    const buffer = await workbook.xlsx.writeBuffer();
     const stamp = new Date().toISOString().slice(0, 10);
-    const filename = `selection_finale_${stamp}.xlsx`;
 
-    return new NextResponse(Buffer.from(buffer), {
+    if (format === "pdf") {
+      const buffer = await buildFinalSelectionPdf(
+        selected.map((g) => ({
+          code: g.code,
+          name: g.name,
+          rows: g.rows,
+        })),
+      );
+      return new NextResponse(new Uint8Array(buffer), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/pdf",
+          "Content-Disposition": `attachment; filename="admis_inscription_${stamp}.pdf"`,
+        },
+      });
+    }
+
+    const buffer = await buildExcel(selected, summary);
+    return new NextResponse(new Uint8Array(buffer), {
       status: 200,
       headers: {
         "Content-Type":
           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "Content-Disposition": `attachment; filename="${filename}"`,
+        "Content-Disposition": `attachment; filename="admis_inscription_${stamp}.xlsx"`,
       },
     });
   } catch (e) {

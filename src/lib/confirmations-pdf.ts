@@ -23,6 +23,12 @@ const COLS = [
   { key: "DateConfirmation", label: "Date", w: 81 },
 ] as const;
 
+export type PdfFiliereGroup = {
+  code: string;
+  name: string;
+  rows: StudentRow[];
+};
+
 function parseScore(row: StudentRow): number {
   const raw = String(row.Score || "")
     .trim()
@@ -43,11 +49,7 @@ function logoPath(): string | null {
 }
 
 /** Group confirmations by known filière code (score desc). */
-export function groupRowsForPublish(rows: StudentRow[]): {
-  code: string;
-  name: string;
-  rows: StudentRow[];
-}[] {
+export function groupRowsForPublish(rows: StudentRow[]): PdfFiliereGroup[] {
   const buckets = new Map<string, StudentRow[]>();
   const other: StudentRow[] = [];
 
@@ -63,7 +65,7 @@ export function groupRowsForPublish(rows: StudentRow[]): {
     else buckets.set(match.code, [row]);
   }
 
-  const out: { code: string; name: string; rows: StudentRow[] }[] = [];
+  const out: PdfFiliereGroup[] = [];
   for (const f of FILIERES) {
     const list = buckets.get(f.code) || [];
     if (list.length === 0) continue;
@@ -83,13 +85,21 @@ export function groupRowsForPublish(rows: StudentRow[]): {
   return out;
 }
 
+type PdfBuildOptions = {
+  docTitle: string;
+  /** Line under filière name (every page). */
+  listSubtitle: string;
+  emptyMessage: string;
+  totalLabel?: (n: number) => string;
+};
+
 /**
- * PDF for website publishing: EST header, filière title, lists, page numbers.
+ * Shared PDF builder: centered EST logo, filière title, table, page numbers.
  */
-export async function buildConfirmationsPdf(
-  rows: StudentRow[],
+export async function buildGroupedListsPdf(
+  groups: PdfFiliereGroup[],
+  options: PdfBuildOptions,
 ): Promise<Buffer> {
-  const groups = groupRowsForPublish(rows);
   const logo = logoPath();
 
   return new Promise((resolve, reject) => {
@@ -99,7 +109,7 @@ export async function buildConfirmationsPdf(
       bufferPages: true,
       autoFirstPage: false,
       info: {
-        Title: "Listes des confirmations — EST Meknès",
+        Title: options.docTitle,
         Author: "EST Meknès",
       },
     });
@@ -112,34 +122,38 @@ export async function buildConfirmationsPdf(
     let currentFiliereTitle = "";
     let y = 0;
 
-    function drawPageChrome() {
-      // Header logo
-      const logoH = 48;
-      const top = 16;
-      if (logo) {
-        try {
-          const maxW = CONTENT_W * 0.92;
-          const maxH = logoH;
-          // Center header mark for website publishing
-          doc.image(logo, MARGIN_X + (CONTENT_W - maxW) / 2, top, {
-            fit: [maxW, maxH],
-          });
-        } catch {
-          // ignore bad image
-        }
-      } else {
+    function drawCenteredLogo(top: number, maxH: number): number {
+      if (!logo) {
         doc
           .font("Helvetica-Bold")
           .fontSize(11)
           .fillColor(BRAND)
-          .text("École Supérieure de Technologie — Meknès", MARGIN_X, top + 12, {
-            width: CONTENT_W,
-            align: "center",
-          });
+          .text(
+            "École Supérieure de Technologie — Meknès",
+            MARGIN_X,
+            top + 12,
+            { width: CONTENT_W, align: "center" },
+          );
+        return maxH;
       }
+      try {
+        const img = doc.openImage(logo);
+        const maxW = CONTENT_W * 0.88;
+        const scale = Math.min(maxW / img.width, maxH / img.height);
+        const drawW = img.width * scale;
+        const drawH = img.height * scale;
+        const x = MARGIN_X + (CONTENT_W - drawW) / 2;
+        doc.image(logo, x, top, { width: drawW, height: drawH });
+        return drawH;
+      } catch {
+        return maxH;
+      }
+    }
 
-      // Brand rule under logo
-      const ruleY = top + logoH + 8;
+    function drawPageChrome() {
+      const top = 14;
+      const drawnH = drawCenteredLogo(top, 52);
+      const ruleY = top + drawnH + 10;
       doc
         .moveTo(MARGIN_X, ruleY)
         .lineTo(MARGIN_X + CONTENT_W, ruleY)
@@ -147,9 +161,8 @@ export async function buildConfirmationsPdf(
         .lineWidth(1.2)
         .stroke();
 
-      y = ruleY + 14;
+      y = ruleY + 12;
 
-      // Filière title (every page of that list)
       if (currentFiliereTitle) {
         doc
           .font("Helvetica-Bold")
@@ -159,16 +172,16 @@ export async function buildConfirmationsPdf(
             width: CONTENT_W,
             align: "center",
           });
-        y += 22;
+        y += 20;
         doc
           .font("Helvetica")
           .fontSize(9)
           .fillColor(BRAND)
-          .text("Liste des étudiants ayant confirmé leur inscription", MARGIN_X, y, {
+          .text(options.listSubtitle, MARGIN_X, y, {
             width: CONTENT_W,
             align: "center",
           });
-        y += 18;
+        y += 16;
       }
     }
 
@@ -228,7 +241,8 @@ export async function buildConfirmationsPdf(
           .fillColor(INK)
           .text(values[col.key] || "", x + 3, y + 4, {
             width: col.w - 6,
-            align: col.key === "Rang" || col.key === "Score" ? "center" : "left",
+            align:
+              col.key === "Rang" || col.key === "Score" ? "center" : "left",
             lineBreak: false,
             ellipsis: true,
           });
@@ -245,50 +259,49 @@ export async function buildConfirmationsPdf(
     }
 
     if (groups.length === 0) {
-      currentFiliereTitle = "Aucune confirmation";
+      currentFiliereTitle = "";
       doc.addPage();
       drawPageChrome();
       doc
         .font("Helvetica")
         .fontSize(11)
         .fillColor(INK)
-        .text("Aucune confirmation à publier.", MARGIN_X, y, {
+        .text(options.emptyMessage, MARGIN_X, y + 20, {
           width: CONTENT_W,
           align: "center",
         });
     } else {
       for (const g of groups) {
-        const title = `${g.code} — ${g.name}`;
-        startFiliere(title);
+        startFiliere(`${g.code} — ${g.name}`);
         let rang = 1;
         for (const row of g.rows) {
           drawDataRow(row, rang, rang % 2 === 0);
           rang += 1;
         }
-        // Count line
         ensureSpace(22);
         y += 6;
+        const totalText = options.totalLabel
+          ? options.totalLabel(g.rows.length)
+          : `Total : ${g.rows.length} étudiant(s)`;
         doc
           .font("Helvetica-Oblique")
           .fontSize(8)
           .fillColor(BRAND)
-          .text(`Total : ${g.rows.length} étudiant(s)`, MARGIN_X, y, {
+          .text(totalText, MARGIN_X, y, {
             width: CONTENT_W,
             align: "right",
           });
       }
     }
 
-    // Page numbers on every buffered page
     const range = doc.bufferedPageRange();
     for (let i = 0; i < range.count; i++) {
       doc.switchToPage(range.start + i);
-      const label = `Page ${i + 1} / ${range.count}`;
       doc
         .font("Helvetica")
         .fontSize(8)
         .fillColor("#666666")
-        .text(label, MARGIN_X, PAGE_H - 24, {
+        .text(`Page ${i + 1} / ${range.count}`, MARGIN_X, PAGE_H - 24, {
           width: CONTENT_W,
           align: "center",
         });
@@ -303,5 +316,30 @@ export async function buildConfirmationsPdf(
     }
 
     doc.end();
+  });
+}
+
+/** All confirmations — Export zone (publication). */
+export async function buildConfirmationsPdf(
+  rows: StudentRow[],
+): Promise<Buffer> {
+  return buildGroupedListsPdf(groupRowsForPublish(rows), {
+    docTitle: "Listes des confirmations — EST Meknès",
+    listSubtitle: "Liste des étudiants ayant confirmé leur inscription",
+    emptyMessage: "Aucune confirmation à publier.",
+  });
+}
+
+/**
+ * Final selection — admitted students (top N by places) for inscription.
+ */
+export async function buildFinalSelectionPdf(
+  groups: PdfFiliereGroup[],
+): Promise<Buffer> {
+  return buildGroupedListsPdf(groups, {
+    docTitle: "Listes des admis à l'inscription — EST Meknès",
+    listSubtitle: "Liste des étudiants admis à procéder à l'inscription",
+    emptyMessage: "Aucune sélection finale à publier.",
+    totalLabel: (n) => `Admis : ${n} étudiant(s)`,
   });
 }
