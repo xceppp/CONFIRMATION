@@ -27,7 +27,8 @@ export async function parseNouveauxInscritsBuffer(
   buffer: Buffer,
 ): Promise<Map<string, DejaInscritInfo>> {
   const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load(Uint8Array.from(buffer));
+  // exceljs Buffer typing conflicts with Node 22 Buffer generics
+  await wb.xlsx.load(buffer as never);
 
   const ws =
     wb.worksheets.find((s) => /inscrit/i.test(s.name)) || wb.worksheets[0];
