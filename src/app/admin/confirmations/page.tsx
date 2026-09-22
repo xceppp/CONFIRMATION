@@ -60,6 +60,7 @@ export default function AdminConfirmationsPage() {
   const [exportOpen, setExportOpen] = useState(false);
   const [exportCols, setExportCols] = useState<string[]>([...DEFAULT_EXPORT_KEYS]);
   const [exporting, setExporting] = useState(false);
+  const [exportingPdf, setExportingPdf] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [clearOpen, setClearOpen] = useState(false);
   const [clearPassword, setClearPassword] = useState("");
@@ -202,6 +203,35 @@ export default function AdminConfirmationsPage() {
     }
   }
 
+  async function doExportPdf() {
+    setExportingPdf(true);
+    setError("");
+    try {
+      const res = await fetch("/api/admin/export/pdf", { method: "POST" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || "Export PDF impossible");
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download =
+        res.headers
+          .get("Content-Disposition")
+          ?.match(/filename="(.+)"/)?.[1] || "listes_confirmations.pdf";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      setError("Erreur réseau pendant l'export PDF.");
+    } finally {
+      setExportingPdf(false);
+    }
+  }
+
   async function doClearLog() {
     if (!clearPassword.trim()) {
       setError("Mot de passe requis pour vider le journal.");
@@ -272,6 +302,14 @@ export default function AdminConfirmationsPage() {
             className="rounded-xl bg-[var(--brand)] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[var(--brand-dark)]"
           >
             Exporter Excel
+          </button>
+          <button
+            type="button"
+            disabled={exportingPdf || total === 0}
+            onClick={() => void doExportPdf()}
+            className="rounded-xl bg-[var(--accent)] px-4 py-2.5 text-sm font-semibold text-white hover:brightness-95 disabled:opacity-50"
+          >
+            {exportingPdf ? "PDF…" : "Exporter PDF"}
           </button>
         </div>
       </div>
