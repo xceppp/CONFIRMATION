@@ -200,11 +200,15 @@ export async function buildGroupedListsPdf(
 
       let x = MARGIN_X;
       for (const col of COLS) {
+        const center = col.key === "Rang" || col.key === "Score";
         doc
           .font("Helvetica-Bold")
           .fontSize(8)
           .fillColor(INK)
-          .text(col.label, x + 3, y + 5, { width: col.w - 6, align: "left" });
+          .text(col.label, x + (center ? 0 : 3), y + 5, {
+            width: center ? col.w : col.w - 6,
+            align: center ? "center" : "left",
+          });
         x += col.w;
       }
       y += rowH;
@@ -239,14 +243,14 @@ export async function buildGroupedListsPdf(
 
       let x = MARGIN_X;
       for (const col of COLS) {
+        const center = col.key === "Rang" || col.key === "Score";
         doc
           .font("Helvetica")
           .fontSize(7.5)
           .fillColor(INK)
-          .text(values[col.key] || "", x + 3, y + 4, {
-            width: col.w - 6,
-            align:
-              col.key === "Rang" || col.key === "Score" ? "center" : "left",
+          .text(values[col.key] || "", x + (center ? 0 : 3), y + 4, {
+            width: center ? col.w : col.w - 6,
+            align: center ? "center" : "left",
             lineBreak: false,
             ellipsis: true,
           });
