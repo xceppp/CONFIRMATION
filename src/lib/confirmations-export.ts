@@ -1,3 +1,4 @@
+import type ExcelJS from "exceljs";
 import type { StudentRow } from "./columns";
 import { CONFIRMATIONS_HEADERS } from "./columns";
 import { resolveFiliereFromLabel } from "./filieres";
@@ -26,6 +27,137 @@ export const DEFAULT_EXPORT_KEYS = [
   "Agent",
   "DateConfirmation",
 ];
+
+const BRAND_ARGB = "FF0A6E8A";
+const HEADER_BG_ARGB = "FFE8F4F0";
+const LINE_ARGB = "FFC5D4D0";
+const ZEBRA_ARGB = "FFF7FAF9";
+
+const COL_WIDTHS: Record<string, number> = {
+  CNE: 18,
+  Code: 16,
+  NomComplet: 36,
+  Filiere: 42,
+  Score: 12,
+  Agent: 16,
+  DateConfirmation: 22,
+};
+
+/** Style a filled sheet as a clean table (header, borders, filter, widths). */
+export function styleConfirmationsSheet(
+  sheet: ExcelJS.Worksheet,
+  columnKeys: string[],
+  options?: { addTotal?: boolean; totalLabel?: string },
+): void {
+  const colCount = columnKeys.length;
+  if (colCount === 0) return;
+
+  const header = sheet.getRow(1);
+  header.height = 22;
+  header.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
+  header.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+  header.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+    if (colNumber > colCount) return;
+    cell.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: BRAND_ARGB },
+    };
+    cell.border = {
+      top: { style: "thin", color: { argb: LINE_ARGB } },
+      left: { style: "thin", color: { argb: LINE_ARGB } },
+      bottom: { style: "thin", color: { argb: LINE_ARGB } },
+      right: { style: "thin", color: { argb: LINE_ARGB } },
+    };
+  });
+
+  const lastDataRow = sheet.rowCount;
+  for (let r = 2; r <= lastDataRow; r++) {
+    const row = sheet.getRow(r);
+    row.height = 18;
+    row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+      if (colNumber > colCount) return;
+      const key = columnKeys[colNumber - 1];
+      cell.border = {
+        top: { style: "thin", color: { argb: LINE_ARGB } },
+        left: { style: "thin", color: { argb: LINE_ARGB } },
+        bottom: { style: "thin", color: { argb: LINE_ARGB } },
+        right: { style: "thin", color: { argb: LINE_ARGB } },
+      };
+      cell.alignment = {
+        vertical: "middle",
+        horizontal:
+          key === "Score" || key === "CNE" || key === "Code"
+            ? "center"
+            : "left",
+      };
+      if (r % 2 === 0) {
+        cell.fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: ZEBRA_ARGB },
+        };
+      }
+      if (key === "Score") {
+        const n = Number.parseFloat(
+          String(cell.value ?? "").replace(",", "."),
+        );
+        if (Number.isFinite(n)) {
+          cell.value = n;
+          cell.numFmt = "0.0000";
+        }
+      }
+      if (key === "NomComplet" && typeof cell.value === "string") {
+        cell.value = cell.value.toUpperCase();
+      }
+    });
+  }
+
+  columnKeys.forEach((key, i) => {
+    const col = sheet.getColumn(i + 1);
+    col.width = COL_WIDTHS[key] ?? 16;
+  });
+
+  if (lastDataRow >= 1) {
+    sheet.autoFilter = {
+      from: { row: 1, column: 1 },
+      to: { row: Math.max(1, lastDataRow), column: colCount },
+    };
+  }
+
+  if (options?.addTotal && lastDataRow >= 1) {
+    const dataCount = Math.max(0, lastDataRow - 1);
+    const totalRow = sheet.addRow(
+      columnKeys.map((_, i) =>
+        i === 0
+          ? options.totalLabel || `Total : ${dataCount}`
+          : i === columnKeys.length - 1
+            ? dataCount
+            : "",
+      ),
+    );
+    totalRow.font = { bold: true, color: { argb: BRAND_ARGB } };
+    totalRow.height = 20;
+    totalRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+      if (colNumber > colCount) return;
+      cell.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: HEADER_BG_ARGB },
+      };
+      cell.border = {
+        top: { style: "medium", color: { argb: BRAND_ARGB } },
+        left: { style: "thin", color: { argb: LINE_ARGB } },
+        bottom: { style: "thin", color: { argb: LINE_ARGB } },
+        right: { style: "thin", color: { argb: LINE_ARGB } },
+      };
+      cell.alignment = {
+        vertical: "middle",
+        horizontal: colNumber === 1 ? "left" : "center",
+      };
+    });
+  }
+}
 
 function parseScore(row: StudentRow): number {
   const raw = String(row.Score || "")

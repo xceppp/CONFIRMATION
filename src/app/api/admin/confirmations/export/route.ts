@@ -6,6 +6,7 @@ import {
   EXPORT_COLUMNS,
   cellValue,
   groupConfirmationsByFiliere,
+  styleConfirmationsSheet,
 } from "@/lib/confirmations-export";
 import { NextResponse } from "next/server";
 
@@ -76,7 +77,7 @@ export async function POST(request: Request) {
         views: [{ state: "frozen", ySplit: 1 }],
       });
       empty.addRow(labels);
-      empty.getRow(1).font = { bold: true };
+      styleConfirmationsSheet(empty, columns, { addTotal: true });
     } else {
       for (const group of groups) {
         const sheet = workbook.addWorksheet(
@@ -86,17 +87,12 @@ export async function POST(request: Request) {
           },
         );
         sheet.addRow(labels);
-        sheet.getRow(1).font = { bold: true };
         for (const row of group.rows) {
           sheet.addRow(columns.map((key: string) => cellValue(row, key)));
         }
-        sheet.columns.forEach((col) => {
-          let max = 12;
-          col.eachCell?.({ includeEmpty: true }, (cell) => {
-            const len = String(cell.value ?? "").length;
-            if (len > max) max = Math.min(len + 2, 40);
-          });
-          col.width = max;
+        styleConfirmationsSheet(sheet, columns, {
+          addTotal: true,
+          totalLabel: `Total confirmés`,
         });
       }
     }

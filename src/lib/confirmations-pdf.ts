@@ -15,11 +15,10 @@ const LINE = "#c5d4d0";
 const HEADER_BG = "#e8f4f0";
 
 const COLS = [
-  { key: "Rang", label: "N°", w: 36, align: "center" as const },
-  { key: "CNE", label: "CNE", w: 110, align: "left" as const },
-  { key: "NomComplet", label: "Nom complet", w: 275, align: "left" as const },
-  { key: "Score", label: "Score", w: 58, align: "center" as const },
-  { key: "FiliereCode", label: "Filière", w: 44, align: "center" as const },
+  { key: "CNE", label: "CNE", w: 120, align: "left" as const },
+  { key: "NomComplet", label: "Nom complet", w: 290, align: "left" as const },
+  { key: "Score", label: "Score", w: 60, align: "center" as const },
+  { key: "FiliereCode", label: "Filière", w: 53, align: "center" as const },
 ] as const;
 
 export type PdfFiliereGroup = {
@@ -227,7 +226,7 @@ export async function buildGroupedListsPdf(
       zebra: boolean,
       filiereCode: string,
     ) {
-      const rowH = 16;
+      const rowH = 15;
       ensureSpace(rowH);
       if (zebra) {
         doc.save();
@@ -238,7 +237,6 @@ export async function buildGroupedListsPdf(
       doc.rect(MARGIN_X, y, CONTENT_W, rowH).stroke();
 
       const values: Record<string, string> = {
-        Rang: String(rang),
         CNE: cellValue(row, "CNE"),
         NomComplet: cellValue(row, "NomComplet").toUpperCase(),
         Score: cellValue(row, "Score"),
@@ -251,7 +249,7 @@ export async function buildGroupedListsPdf(
           .font("Helvetica")
           .fontSize(7.5)
           .fillColor(INK)
-          .text(values[col.key] || "", x + 3, y + 4, {
+          .text(values[col.key] || "", x + 3, y + 3.5, {
             width: col.w - 6,
             align: col.align,
             lineBreak: false,
@@ -289,19 +287,23 @@ export async function buildGroupedListsPdf(
           drawDataRow(row, rang, rang % 2 === 0, g.code);
           rang += 1;
         }
-        ensureSpace(22);
+        ensureSpace(24);
         y += 6;
         const totalText = options.totalLabel
           ? options.totalLabel(g.rows.length)
-          : `Total : ${g.rows.length} étudiant(s)`;
+          : `Nombre d'étudiants confirmés : ${g.rows.length}`;
+        doc.save();
+        doc.rect(MARGIN_X, y, CONTENT_W, 18).fill(HEADER_BG);
+        doc.restore();
         doc
-          .font("Helvetica-Oblique")
-          .fontSize(8)
+          .font("Helvetica-Bold")
+          .fontSize(9)
           .fillColor(BRAND)
-          .text(totalText, MARGIN_X, y, {
-            width: CONTENT_W,
+          .text(totalText, MARGIN_X + 6, y + 5, {
+            width: CONTENT_W - 12,
             align: "right",
           });
+        y += 20;
       }
     }
 
