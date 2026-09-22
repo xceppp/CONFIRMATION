@@ -624,25 +624,6 @@ export async function buildFinalSelectionPdf(
           else fresh.push(row);
         }
 
-        if (fresh.length) {
-          startBlock(title, "ADMIS À L'INSCRIPTION", false);
-          let rang = 1;
-          for (const row of fresh) {
-            drawDataRow(row, rang, rang % 2 === 0, g.code);
-            rang += 1;
-          }
-          ensureSpace(18);
-          y += 4;
-          doc
-            .font("Helvetica-Oblique")
-            .fontSize(8)
-            .fillColor(BRAND)
-            .text(`Total admis à l'inscription : ${fresh.length}`, MARGIN_X, y, {
-              width: CONTENT_W,
-              align: "right",
-            });
-        }
-
         if (change.length) {
           startBlock(
             title,
@@ -666,6 +647,25 @@ export async function buildFinalSelectionPdf(
               y,
               { width: CONTENT_W, align: "right" },
             );
+        }
+
+        if (fresh.length) {
+          startBlock(title, "ADMIS À L'INSCRIPTION", false);
+          let rang = 1;
+          for (const row of fresh) {
+            drawDataRow(row, rang, rang % 2 === 0, g.code);
+            rang += 1;
+          }
+          ensureSpace(18);
+          y += 4;
+          doc
+            .font("Helvetica-Oblique")
+            .fontSize(8)
+            .fillColor(BRAND)
+            .text(`Total admis à l'inscription : ${fresh.length}`, MARGIN_X, y, {
+              width: CONTENT_W,
+              align: "right",
+            });
         }
       }
     }
