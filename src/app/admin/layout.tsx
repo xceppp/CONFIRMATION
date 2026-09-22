@@ -14,7 +14,7 @@ export default function AdminLayout({
   }
 
   return (
-    <main className="mx-auto min-h-screen w-full max-w-4xl px-4 py-8">
+    <main className="mx-auto min-h-screen w-full max-w-7xl px-4 py-8">
       <AdminNav />
       {children}
     </main>

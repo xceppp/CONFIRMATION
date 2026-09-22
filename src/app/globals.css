@@ -12,13 +12,14 @@
   --ok: #1f7a4d;
   --danger: #b42318;
   --warn-bg: #fff4e5;
+  --font-display: "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+  --font-body: "Segoe UI", system-ui, -apple-system, sans-serif;
 }
 
 @theme inline {
   --color-background: var(--bg);
   --color-foreground: var(--ink);
   --font-sans: var(--font-body);
-  --font-display: var(--font-display);
 }
 
 body {

@@ -8,12 +8,55 @@ import {
 
 type Row = Record<string, string>;
 type Group = { filiere: string; count: number; rows: Row[] };
+type SortKey = "score" | "cne" | "nom" | "filiere" | "agent" | "date";
+
+function nomOf(r: Row): string {
+  return (
+    String(r.NomComplet || "").trim() ||
+    `${r.PrenomFr || ""} ${r.NomFr || ""}`.trim() ||
+    ""
+  );
+}
+
+function scoreOf(r: Row): number {
+  const n = Number.parseFloat(String(r.Score || "").replace(",", "."));
+  return Number.isFinite(n) ? n : -Infinity;
+}
+
+function sortRows(rows: Row[], key: SortKey, dir: "asc" | "desc"): Row[] {
+  const mul = dir === "asc" ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    let cmp = 0;
+    if (key === "score") cmp = scoreOf(a) - scoreOf(b);
+    else if (key === "cne")
+      cmp = String(a.CNE || a.Code || "").localeCompare(
+        String(b.CNE || b.Code || ""),
+        "fr",
+      );
+    else if (key === "nom")
+      cmp = nomOf(a).localeCompare(nomOf(b), "fr");
+    else if (key === "filiere")
+      cmp = String(a.Filiere || "").localeCompare(String(b.Filiere || ""), "fr");
+    else if (key === "agent")
+      cmp = String(a.Agent || "").localeCompare(String(b.Agent || ""), "fr");
+    else
+      cmp = String(a.DateConfirmation || "").localeCompare(
+        String(b.DateConfirmation || ""),
+        "fr",
+      );
+    if (cmp !== 0) return cmp * mul;
+    return scoreOf(b) - scoreOf(a);
+  });
+}
 
 export default function AdminConfirmationsPage() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [filiereFilter, setFiliereFilter] = useState("all");
+  const [search, setSearch] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey>("score");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [exportOpen, setExportOpen] = useState(false);
   const [exportCols, setExportCols] = useState<string[]>([...DEFAULT_EXPORT_KEYS]);
   const [exporting, setExporting] = useState(false);
@@ -43,15 +86,74 @@ export default function AdminConfirmationsPage() {
     load();
   }, []);
 
-  const visibleGroups = useMemo(() => {
-    if (filiereFilter === "all") return groups;
-    return groups.filter((g) => g.filiere === filiereFilter);
-  }, [groups, filiereFilter]);
-
-  const total = useMemo(
-    () => visibleGroups.reduce((n, g) => n + g.count, 0),
-    [visibleGroups],
+  const allRows = useMemo(
+    () => groups.flatMap((g) => g.rows),
+    [groups],
   );
+
+  const visibleRows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    let rows = allRows;
+    if (filiereFilter !== "all") {
+      rows = rows.filter((r) => r.Filiere === filiereFilter);
+    }
+    if (q) {
+      rows = rows.filter((r) => {
+        const hay = [
+          r.CNE,
+          r.Code,
+          r.NomComplet,
+          r.PrenomFr,
+          r.NomFr,
+          r.Filiere,
+          r.Score,
+          r.Agent,
+          r.DateConfirmation,
+        ]
+          .map((v) => String(v || "").toLowerCase())
+          .join(" ");
+        return hay.includes(q);
+      });
+    }
+    return sortRows(rows, sortKey, sortDir);
+  }, [allRows, filiereFilter, search, sortKey, sortDir]);
+
+  const total = visibleRows.length;
+
+  function clickSort(key: SortKey) {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir(key === "score" || key === "date" ? "desc" : "asc");
+    }
+  }
+
+  function SortTh({
+    k,
+    label,
+    className = "py-2 pr-3",
+  }: {
+    k: SortKey;
+    label: string;
+    className?: string;
+  }) {
+    const active = sortKey === k;
+    return (
+      <th className={className}>
+        <button
+          type="button"
+          onClick={() => clickSort(k)}
+          className={`font-medium hover:text-[var(--brand)] ${
+            active ? "text-[var(--brand)]" : "text-[var(--muted)]"
+          }`}
+        >
+          {label}
+          {active ? (sortDir === "desc" ? " ↓" : " ↑") : ""}
+        </button>
+      </th>
+    );
+  }
 
   function toggleCol(key: string) {
     setExportCols((prev) =>
@@ -147,7 +249,7 @@ export default function AdminConfirmationsPage() {
             Confirmations
           </h2>
           <p className="mt-1 text-[var(--muted)]">
-            Classées par filière, score du plus élevé au plus bas.
+            Cliquez une colonne pour trier.
             {loading ? "" : ` — ${total} affiché${total > 1 ? "s" : ""}`}
           </p>
         </div>
@@ -221,6 +323,16 @@ export default function AdminConfirmationsPage() {
       ) : null}
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
+        <label className="min-w-[220px] flex-1 text-sm font-medium sm:max-w-md">
+          Recherche
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="CNE, nom, filière, agent, score…"
+            className="mt-1.5 w-full rounded-xl border border-[var(--line)] bg-white px-3 py-2 outline-none ring-[var(--brand)] focus:ring-2"
+          />
+        </label>
         <label className="text-sm font-medium">
           Filière{" "}
           <select
@@ -249,8 +361,8 @@ export default function AdminConfirmationsPage() {
         <section className="mt-4 rounded-2xl border border-[var(--line)] bg-[var(--bg-card)] p-5">
           <h3 className="text-lg font-semibold">Options d&apos;export</h3>
           <p className="mt-1 text-sm text-[var(--muted)]">
-            Cochez uniquement les colonnes voulues (ex. CNE, nom, filière,
-            score). Respecte le filtre filière ci-dessus. Fichier .xlsx.
+            Une feuille Excel par filière (score ↓). Cochez les colonnes
+            voulues. Respecte le filtre filière ci-dessus.
           </p>
           <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {EXPORT_COLUMNS.map((col) => (
@@ -307,72 +419,71 @@ export default function AdminConfirmationsPage() {
         </p>
       ) : null}
 
-      <section className="mt-6 space-y-6">
+      <section className="mt-6">
         {loading ? (
           <p className="text-sm text-[var(--muted)]">Chargement…</p>
-        ) : visibleGroups.length === 0 ? (
+        ) : visibleRows.length === 0 ? (
           <p className="rounded-2xl border border-[var(--line)] bg-[var(--bg-card)] p-5 text-sm text-[var(--muted)]">
             Aucune confirmation pour le moment.
           </p>
         ) : (
-          visibleGroups.map((g) => (
-            <div
-              key={g.filiere}
-              className="rounded-2xl border border-[var(--line)] bg-[var(--bg-card)] p-5"
-            >
-              <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-                <h3 className="text-lg font-semibold">{g.filiere}</h3>
-                <span className="text-sm text-[var(--muted)]">
-                  {g.count} étudiant{g.count > 1 ? "s" : ""} — score ↓
-                </span>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[800px] text-left text-sm">
-                  <thead>
-                    <tr className="border-b border-[var(--line)] text-[var(--muted)]">
-                      <th className="py-2 pr-3 font-medium">#</th>
-                      <th className="py-2 pr-3 font-medium">Score</th>
-                      <th className="py-2 pr-3 font-medium">CNE</th>
-                      <th className="py-2 pr-3 font-medium">Nom complet</th>
-                      <th className="py-2 pr-3 font-medium">Filière</th>
-                      <th className="py-2 pr-3 font-medium">Agent</th>
-                      <th className="py-2 font-medium">Date</th>
+          <div className="rounded-2xl border border-[var(--line)] bg-[var(--bg-card)] p-5">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[800px] text-left text-sm">
+                <thead>
+                  <tr className="border-b border-[var(--line)]">
+                    <th className="py-2 pr-3 font-medium text-[var(--muted)]">
+                      #
+                    </th>
+                    <SortTh k="score" label="Score" />
+                    <SortTh k="cne" label="CNE" />
+                    <SortTh k="nom" label="Nom complet" />
+                    <SortTh k="filiere" label="Filière" />
+                    <SortTh k="agent" label="Agent" />
+                    <SortTh k="date" label="Date" className="py-2" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleRows.map((r, i) => (
+                    <tr
+                      key={`${r.CNE || r.Code}-${r.DateConfirmation}-${i}`}
+                      className="border-b border-[var(--line)]/70"
+                    >
+                      <td className="py-2 pr-3 text-[var(--muted)]">
+                        {i + 1}
+                      </td>
+                      <td className="py-2 pr-3 font-semibold">
+                        {r.Score || "—"}
+                      </td>
+                      <td className="py-2 pr-3 font-medium">
+                        {r.CNE || r.Code}
+                      </td>
+                      <td className="py-2 pr-3">{nomOf(r) || "—"}</td>
+                      <td className="py-2 pr-3">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setFiliereFilter((prev) =>
+                              prev === r.Filiere ? "all" : r.Filiere || "all",
+                            )
+                          }
+                          className="text-left hover:text-[var(--brand)] hover:underline"
+                        >
+                          {r.Filiere || "—"}
+                        </button>
+                      </td>
+                      <td className="py-2 pr-3 font-medium">
+                        {r.Agent || "—"}
+                      </td>
+                      <td className="py-2 text-[var(--muted)]">
+                        {r.DateConfirmation || "—"}
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {g.rows.map((r, i) => (
-                      <tr
-                        key={`${r.CNE || r.Code}-${i}`}
-                        className="border-b border-[var(--line)]/70"
-                      >
-                        <td className="py-2 pr-3 text-[var(--muted)]">
-                          {i + 1}
-                        </td>
-                        <td className="py-2 pr-3 font-semibold">
-                          {r.Score || "—"}
-                        </td>
-                        <td className="py-2 pr-3 font-medium">
-                          {r.CNE || r.Code}
-                        </td>
-                        <td className="py-2 pr-3">
-                          {r.NomComplet ||
-                            `${r.PrenomFr || ""} ${r.NomFr || ""}`.trim() ||
-                            "—"}
-                        </td>
-                        <td className="py-2 pr-3">{r.Filiere || "—"}</td>
-                        <td className="py-2 pr-3 font-medium">
-                          {r.Agent || "—"}
-                        </td>
-                        <td className="py-2 text-[var(--muted)]">
-                          {r.DateConfirmation || "—"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          ))
+          </div>
         )}
       </section>
     </div>
