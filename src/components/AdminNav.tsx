@@ -10,6 +10,7 @@ const LINKS = [
   { href: "/admin/confirmations", label: "Confirmations" },
   { href: "/admin/table", label: "Table" },
   { href: "/admin/final", label: "Final" },
+  { href: "/admin/export", label: "Export" },
 ];
 
 export function AdminNav() {
