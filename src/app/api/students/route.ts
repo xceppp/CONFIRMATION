@@ -34,7 +34,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const rows = await getEtudiantsByCode(code);
+    let rows = await getEtudiantsByCode(code);
 
     // If Confirmations sheet is quota-blocked, still show the student so
     // the agent can force confirmation (append path has its own retries).
@@ -44,6 +44,32 @@ export async function GET(request: Request) {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (!/quota|saturé|rate limit/i.test(msg)) throw e;
+    }
+
+    // Already in Confirmations but missing from filière cache (stale RAM /
+    // quota / cold instance) — show "déjà confirmé", not "introuvable".
+    if (rows.length === 0 && confirmed) {
+      const name = String(confirmed.NomComplet || "").trim();
+      const parts = name.split(/\s+/).filter(Boolean);
+      const prenom = String(confirmed.PrenomFr || parts[0] || "");
+      const nom =
+        String(confirmed.NomFr || "") ||
+        (parts.length > 1 ? parts.slice(1).join(" ") : "");
+      return NextResponse.json({
+        found: true,
+        alreadyConfirmed: true,
+        confirmation: confirmed,
+        student: {
+          Code: String(confirmed.CNE || confirmed.Code || code).toUpperCase(),
+          NomFr: nom,
+          PrenomFr: prenom,
+          Cin: "",
+          Telephone: "",
+          Email: "",
+          Score: String(confirmed.Score || ""),
+        },
+        filieres: [],
+      });
     }
 
     if (rows.length === 0) {

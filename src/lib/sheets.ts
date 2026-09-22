@@ -743,12 +743,17 @@ function alreadyConfirmedMessage(row: StudentRow): string {
 
 export async function getEtudiantsByCode(code: string): Promise<StudentRow[]> {
   // Warm once into RAM — do not re-read Sheets on every search (quota).
-  const c = await getCache();
-  if (c.etudiantCount === 0) {
-    await refreshStudents({ force: true });
+  const needle = normCode(code);
+  let latest = await getCache();
+  if (latest.etudiantCount === 0) {
+    try {
+      await refreshStudents({ force: true });
+    } catch (e) {
+      if (!isQuotaError(e)) throw e;
+    }
+    latest = await getCache();
   }
-  const latest = await getCache();
-  return latest.etudiantsByCode.get(normCode(code)) ?? [];
+  return latest.etudiantsByCode.get(needle) ?? [];
 }
 
 /**

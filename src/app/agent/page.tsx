@@ -147,7 +147,6 @@ export default function AgentPage() {
   }
 
   function pickSuggestion(s: Suggestion) {
-    if (s.alreadyConfirmed) return;
     setShowSuggestions(false);
     setSuggestions([]);
     void search(undefined, s.Code);
@@ -273,10 +272,9 @@ export default function AgentPage() {
                       <li key={s.Code}>
                         <button
                           type="button"
-                          disabled={locked}
                           className={`flex w-full flex-col items-start gap-0.5 px-4 py-2.5 text-left ${
                             locked
-                              ? "cursor-not-allowed bg-amber-50/80 opacity-70"
+                              ? "bg-amber-50/80 hover:bg-amber-100/80"
                               : "hover:bg-[#e8f4f0]"
                           }`}
                           onMouseDown={(e) => e.preventDefault()}
