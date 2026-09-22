@@ -137,7 +137,13 @@ export async function buildGroupedListsPdf(
         return maxH;
       }
       try {
-        const img = doc.openImage(logo);
+        // pdfkit runtime has openImage; typings omit it on some versions
+        const openImage = (
+          doc as unknown as {
+            openImage: (src: string) => { width: number; height: number };
+          }
+        ).openImage.bind(doc);
+        const img = openImage(logo);
         const maxW = CONTENT_W * 0.88;
         const scale = Math.min(maxW / img.width, maxH / img.height);
         const drawW = img.width * scale;
