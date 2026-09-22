@@ -5,18 +5,55 @@ import { FILIERES, resolveFiliereFromLabel } from "@/lib/filieres";
 
 type ConfCounts = Record<string, number>;
 
+const PLACES_STORAGE_KEY = "admin-final-places";
+
+/** Default Places (N) — used until the admin edits (then remembered locally). */
+const DEFAULT_PLACES: Record<string, string> = {
+  DWM: "48",
+  FBA: "58",
+  GC: "48",
+  GETE: "73",
+  GI: "92",
+  GTE: "84",
+  IATE: "48",
+  PMD: "58",
+  TCC: "55",
+  TM: "44",
+};
+
+function emptyPlaces(): Record<string, string> {
+  const init: Record<string, string> = {};
+  for (const f of FILIERES) init[f.code] = DEFAULT_PLACES[f.code] ?? "";
+  return init;
+}
+
+function loadSavedPlaces(): Record<string, string> {
+  const init = emptyPlaces();
+  try {
+    const raw = localStorage.getItem(PLACES_STORAGE_KEY);
+    if (!raw) return init;
+    const saved = JSON.parse(raw) as Record<string, unknown>;
+    if (!saved || typeof saved !== "object") return init;
+    for (const f of FILIERES) {
+      const v = saved[f.code];
+      if (v != null && String(v).trim() !== "") {
+        init[f.code] = String(v);
+      }
+    }
+  } catch {
+    /* ignore corrupt storage */
+  }
+  return init;
+}
+
 export default function AdminFinalPage() {
-  const [places, setPlaces] = useState<Record<string, string>>(() => {
-    const init: Record<string, string> = {};
-    for (const f of FILIERES) init[f.code] = "";
-    return init;
-  });
+  const [places, setPlaces] = useState<Record<string, string>>(emptyPlaces);
+  const [placesHydrated, setPlacesHydrated] = useState(false);
   const [confirmedByCode, setConfirmedByCode] = useState<ConfCounts>({});
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState<"excel" | "pdf" | null>(null);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
-  const [inscritsFile, setInscritsFile] = useState<File | null>(null);
 
   async function loadCounts() {
     setLoading(true);
@@ -56,8 +93,19 @@ export default function AdminFinalPage() {
   }
 
   useEffect(() => {
+    setPlaces(loadSavedPlaces());
+    setPlacesHydrated(true);
     void loadCounts();
   }, []);
+
+  useEffect(() => {
+    if (!placesHydrated) return;
+    try {
+      localStorage.setItem(PLACES_STORAGE_KEY, JSON.stringify(places));
+    } catch {
+      /* quota / private mode */
+    }
+  }, [places, placesHydrated]);
 
   const filledCount = useMemo(
     () =>
@@ -83,23 +131,11 @@ export default function AdminFinalPage() {
         return;
       }
 
-      let res: Response;
-      if (format === "pdf" && inscritsFile) {
-        const fd = new FormData();
-        fd.set("format", "pdf");
-        fd.set("places", JSON.stringify(bodyPlaces));
-        fd.set("inscrits", inscritsFile);
-        res = await fetch("/api/admin/final/export", {
-          method: "POST",
-          body: fd,
-        });
-      } else {
-        res = await fetch("/api/admin/final/export", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ places: bodyPlaces, format }),
-        });
-      }
+      const res = await fetch("/api/admin/final/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ places: bodyPlaces, format }),
+      });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         setError(data.error || "Export impossible");
@@ -122,9 +158,7 @@ export default function AdminFinalPage() {
       URL.revokeObjectURL(url);
       setInfo(
         format === "pdf"
-          ? inscritsFile
-            ? "PDF publié — sections séparées : Admis à l'inscription / Déjà inscrits (changement de filière)."
-            : "PDF des admis téléchargé. Ajoutez le fichier nouveaux inscrits pour séparer les changements de filière."
+          ? "PDF des admis téléchargé — listes pour inscription / publication."
           : "Excel des admis téléchargé — top scores selon les places (usage local).",
       );
     } catch {
@@ -145,8 +179,9 @@ export default function AdminFinalPage() {
             Final
           </h2>
           <p className="mt-1 max-w-2xl text-[var(--muted)]">
-            Indiquez le nombre de places par filière. L&apos;export prend les
-            confirmés classés par score (du plus élevé) — ce sont les{" "}
+            Indiquez le nombre de places par filière (valeurs mémorisées et
+            modifiables). L&apos;export prend les confirmés classés par score
+            (du plus élevé) — ce sont les{" "}
             <strong className="font-semibold text-[var(--ink)]">admis</strong>{" "}
             à procéder à l&apos;inscription. Excel pour le local, PDF pour la
             publication.
@@ -189,36 +224,6 @@ export default function AdminFinalPage() {
           {info}
         </p>
       ) : null}
-
-      <section className="mt-6 rounded-2xl border border-[var(--line)] bg-[var(--bg-card)] p-5">
-        <h3 className="text-sm font-semibold">
-          Nouveaux inscrits (pour le PDF publication)
-        </h3>
-        <p className="mt-1 text-sm text-[var(--muted)]">
-          Importez le fichier Excel des déjà inscrits. Le PDF séparera alors{" "}
-          <strong className="text-[var(--ink)]">Admis à l&apos;inscription</strong>{" "}
-          et{" "}
-          <strong className="text-[var(--ink)]">
-            Étudiants déjà inscrits — changement de filière
-          </strong>{" "}
-          (avec filière d&apos;origine).
-        </p>
-        <input
-          type="file"
-          accept=".xlsx,.xls"
-          className="mt-3 block w-full max-w-lg text-sm"
-          onChange={(e) => setInscritsFile(e.target.files?.[0] || null)}
-        />
-        {inscritsFile ? (
-          <p className="mt-2 text-xs text-[var(--ok)]">
-            Fichier prêt : {inscritsFile.name}
-          </p>
-        ) : (
-          <p className="mt-2 text-xs text-[var(--muted)]">
-            Sans ce fichier, le PDF reste une seule liste d&apos;admis.
-          </p>
-        )}
-      </section>
 
       <section className="mt-6 overflow-x-auto rounded-2xl border border-[var(--line)] bg-[var(--bg-card)] p-5">
         {loading ? (
