@@ -15,11 +15,11 @@ const LINE = "#c5d4d0";
 const HEADER_BG = "#e8f4f0";
 
 const COLS = [
-  { key: "Rang", label: "N°", w: 36 },
-  { key: "CNE", label: "CNE", w: 100 },
-  { key: "NomComplet", label: "Nom complet", w: 260 },
-  { key: "Score", label: "Score", w: 60 },
-  { key: "DateConfirmation", label: "Date", w: 67 },
+  { key: "Rang", label: "N°", w: 36, align: "center" as const },
+  { key: "CNE", label: "CNE", w: 110, align: "left" as const },
+  { key: "NomComplet", label: "Nom complet", w: 275, align: "left" as const },
+  { key: "Score", label: "Score", w: 58, align: "center" as const },
+  { key: "FiliereCode", label: "Filière", w: 44, align: "center" as const },
 ] as const;
 
 export type PdfFiliereGroup = {
@@ -200,14 +200,13 @@ export async function buildGroupedListsPdf(
 
       let x = MARGIN_X;
       for (const col of COLS) {
-        const center = col.key === "Rang" || col.key === "Score";
         doc
           .font("Helvetica-Bold")
           .fontSize(8)
           .fillColor(INK)
-          .text(col.label, x + (center ? 0 : 3), y + 5, {
-            width: center ? col.w : col.w - 6,
-            align: center ? "center" : "left",
+          .text(col.label, x + 3, y + 5, {
+            width: col.w - 6,
+            align: col.align,
           });
         x += col.w;
       }
@@ -222,7 +221,12 @@ export async function buildGroupedListsPdf(
       drawTableHeader();
     }
 
-    function drawDataRow(row: StudentRow, rang: number, zebra: boolean) {
+    function drawDataRow(
+      row: StudentRow,
+      rang: number,
+      zebra: boolean,
+      filiereCode: string,
+    ) {
       const rowH = 16;
       ensureSpace(rowH);
       if (zebra) {
@@ -238,19 +242,18 @@ export async function buildGroupedListsPdf(
         CNE: cellValue(row, "CNE"),
         NomComplet: cellValue(row, "NomComplet").toUpperCase(),
         Score: cellValue(row, "Score"),
-        DateConfirmation: cellValue(row, "DateConfirmation"),
+        FiliereCode: filiereCode,
       };
 
       let x = MARGIN_X;
       for (const col of COLS) {
-        const center = col.key === "Rang" || col.key === "Score";
         doc
           .font("Helvetica")
           .fontSize(7.5)
           .fillColor(INK)
-          .text(values[col.key] || "", x + (center ? 0 : 3), y + 4, {
-            width: center ? col.w : col.w - 6,
-            align: center ? "center" : "left",
+          .text(values[col.key] || "", x + 3, y + 4, {
+            width: col.w - 6,
+            align: col.align,
             lineBreak: false,
             ellipsis: true,
           });
@@ -283,7 +286,7 @@ export async function buildGroupedListsPdf(
         startFiliere(`${g.code} — ${g.name}`);
         let rang = 1;
         for (const row of g.rows) {
-          drawDataRow(row, rang, rang % 2 === 0);
+          drawDataRow(row, rang, rang % 2 === 0, g.code);
           rang += 1;
         }
         ensureSpace(22);
