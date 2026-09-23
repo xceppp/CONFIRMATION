@@ -303,7 +303,33 @@ export type FinalRoundSpec = {
 };
 
 /**
- * List 1 = top `list1` by score.
+ * Published liste-1 floor. A confirmed student at or above this score
+ * stays on liste 1 even when newer confirmations would push the top-N
+ * cutoff higher. GI is the last name on the published list (16.7928).
+ */
+export const PUBLISHED_LIST1_SEUIL: Record<string, number> = {
+  GI: 16.7928,
+};
+
+/** How many leading rows of a score-desc pool belong on liste 1. */
+export function liste1CutoffIndex(
+  code: string,
+  list1: number,
+  scoresDesc: number[],
+): number {
+  const n = Math.min(Math.max(0, Math.floor(list1)), scoresDesc.length);
+  const floor = PUBLISHED_LIST1_SEUIL[code];
+  if (floor == null || !Number.isFinite(floor)) return n;
+  let atOrAbove = 0;
+  for (const score of scoresDesc) {
+    if (!(score + 1e-6 >= floor)) break;
+    atOrAbove += 1;
+  }
+  return Math.max(n, atOrAbove);
+}
+
+/**
+ * List 1 = top `list1` by score, extended through the published seuil.
  * List 2 = the next `list2` after those, so nobody from list 1 is repeated.
  */
 export function selectFinalRound(
@@ -351,12 +377,17 @@ export function selectFinalRound(
       .filter((r) => rowMatchesFiliere(r, f.code, f.name))
       .sort((a, b) => parseScore(b) - parseScore(a));
 
-    const first = pool.slice(0, list1);
+    const end = liste1CutoffIndex(
+      f.code,
+      list1,
+      pool.map((row) => parseScore(row)),
+    );
+    const first = pool.slice(0, end);
     const lastOfFirst = first[first.length - 1];
     const seuil =
       lastOfFirst != null ? cellValue(lastOfFirst, "Score") : "";
     const picked =
-      round === 1 ? first : pool.slice(list1, list1 + list2);
+      round === 1 ? first : pool.slice(end, end + list2);
 
     selected.push({
       code: f.code,

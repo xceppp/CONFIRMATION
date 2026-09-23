@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { liste1CutoffIndex } from "@/lib/confirmations-export";
 import { FILIERES, resolveFiliereFromLabel } from "@/lib/filieres";
 
 type ConfCounts = Record<string, number>;
@@ -171,7 +172,12 @@ export default function AdminFinalPage() {
     const pool = confRows
       .filter((row) => resolveFiliereFromLabel(String(row.Filiere || row.FiliereCode || ""))?.code === code)
       .sort((a, b) => scoreOf(b) - scoreOf(a));
-    const last = pool[Math.min(n, pool.length) - 1];
+    const end = liste1CutoffIndex(
+      code,
+      n,
+      pool.map((row) => scoreOf(row)),
+    );
+    const last = pool[end - 1];
     if (!last) return "—";
     return String(last.Score || "—");
   }
@@ -261,9 +267,10 @@ export default function AdminFinalPage() {
           </h2>
           <p className="mt-1 max-w-2xl text-[var(--muted)]">
             Liste 1 : les N premiers confirmés par score. Le dernier fixe le
-            seuil. Liste 2 : vous indiquez combien d&apos;étudiants ajouter.
-            L&apos;export prend les suivants, juste après ce seuil, sans
-            reprendre la liste 1.
+            seuil. GI garde le seuil publié 16.7928 : tout confirmé à ce
+            score ou au-dessus reste en liste 1. Liste 2 : vous indiquez
+            combien d&apos;étudiants ajouter. L&apos;export prend les
+            suivants, juste après ce seuil, sans reprendre la liste 1.
           </p>
         </div>
         <div className="flex flex-col items-end gap-2">
