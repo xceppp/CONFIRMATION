@@ -7,6 +7,7 @@ type ConfCounts = Record<string, number>;
 
 const PLACES_STORAGE_KEY = "admin-final-places";
 const EXTRA_STORAGE_KEY = "admin-final-places-2";
+const LIST1_EDIT_PASSWORD = "1955";
 
 type ConfRow = Record<string, string>;
 
@@ -73,6 +74,9 @@ export default function AdminFinalPage() {
   const [exporting, setExporting] = useState<
     "l1-excel" | "l1-pdf" | "l2-excel" | "l2-pdf" | null
   >(null);
+  const [list1Unlocked, setList1Unlocked] = useState(false);
+  const [unlockOpen, setUnlockOpen] = useState(false);
+  const [unlockPassword, setUnlockPassword] = useState("");
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
 
@@ -148,6 +152,18 @@ export default function AdminFinalPage() {
       }).length,
     [extra],
   );
+
+  function tryUnlockList1() {
+    if (unlockPassword.trim() !== LIST1_EDIT_PASSWORD) {
+      setError("Mot de passe incorrect. Liste 1 reste verrouillée.");
+      return;
+    }
+    setList1Unlocked(true);
+    setUnlockOpen(false);
+    setUnlockPassword("");
+    setError("");
+    setInfo("Liste 1 déverrouillée. Vous pouvez modifier les places.");
+  }
 
   function seuilOf(code: string): string {
     const n = Number.parseInt(places[code] || "", 10);
@@ -309,6 +325,62 @@ export default function AdminFinalPage() {
       ) : null}
 
       <section className="mt-6 overflow-x-auto rounded-2xl border border-[var(--line)] bg-[var(--bg-card)] p-5">
+        <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+          <p className="text-sm text-[var(--muted)]">
+            Liste 1 est verrouillée pour éviter une modification accidentelle.
+            Liste 2 reste libre.
+          </p>
+          {list1Unlocked ? (
+            <button
+              type="button"
+              onClick={() => {
+                setList1Unlocked(false);
+                setUnlockOpen(false);
+                setUnlockPassword("");
+                setInfo("Liste 1 verrouillée.");
+              }}
+              className="rounded-xl border border-[var(--line)] bg-white px-4 py-2 text-sm font-semibold"
+            >
+              Verrouiller liste 1
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                setUnlockOpen((v) => !v);
+                setUnlockPassword("");
+                setError("");
+              }}
+              className="rounded-xl border border-[var(--line)] bg-white px-4 py-2 text-sm font-semibold"
+            >
+              Modifier liste 1
+            </button>
+          )}
+        </div>
+        {unlockOpen && !list1Unlocked ? (
+          <div className="mb-4 flex flex-wrap items-end gap-2">
+            <label className="text-sm font-medium">
+              Mot de passe
+              <input
+                type="password"
+                value={unlockPassword}
+                onChange={(e) => setUnlockPassword(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") tryUnlockList1();
+                }}
+                autoComplete="off"
+                className="mt-1.5 block w-40 rounded-xl border border-[var(--line)] bg-white px-3 py-2 outline-none ring-[var(--brand)] focus:ring-2"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={tryUnlockList1}
+              className="rounded-xl bg-[var(--brand)] px-4 py-2 text-sm font-semibold text-white"
+            >
+              Déverrouiller
+            </button>
+          </div>
+        ) : null}
         {loading ? (
           <p className="text-sm text-[var(--muted)]">Chargement…</p>
         ) : (
@@ -354,13 +426,14 @@ export default function AdminFinalPage() {
                         inputMode="numeric"
                         placeholder="ex. 50"
                         value={places[f.code]}
+                        disabled={!list1Unlocked}
                         onChange={(e) =>
                           setPlaces((prev) => ({
                             ...prev,
                             [f.code]: e.target.value,
                           }))
                         }
-                        className="w-28 rounded-xl border border-[var(--line)] bg-white px-3 py-2 outline-none ring-[var(--brand)] focus:ring-2"
+                        className="w-28 rounded-xl border border-[var(--line)] bg-white px-3 py-2 outline-none ring-[var(--brand)] focus:ring-2 disabled:cursor-not-allowed disabled:bg-[var(--bg)] disabled:text-[var(--muted)]"
                       />
                     </td>
                     <td className="py-3 pr-3 font-medium text-[var(--ink)]">
