@@ -4,7 +4,7 @@ import { FILIERES } from "@/lib/filieres";
 import { listConfirmations } from "@/lib/sheets";
 import {
   cellValue,
-  selectTopConfirmationsByPlaces,
+  selectFinalRound,
 } from "@/lib/confirmations-export";
 import { buildFinalSelectionPdf } from "@/lib/confirmations-pdf";
 import { NextResponse } from "next/server";
@@ -22,29 +22,33 @@ const COLUMNS = [
   { key: "DateConfirmation", label: "Date confirmation" },
 ] as const;
 
-function parsePlaces(body: unknown): {
+function readCountMap(body: unknown, key: string): Record<string, unknown> {
+  if (!body || typeof body !== "object" || !(key in body)) return {};
+  const raw = (body as Record<string, unknown>)[key];
+  if (!raw || typeof raw !== "object") return {};
+  return raw as Record<string, unknown>;
+}
+
+function parseRoundSpecs(body: unknown): {
   code: string;
   name: string;
-  places: number;
+  list1: number;
+  list2: number;
 }[] {
-  const placesRaw =
-    body &&
-    typeof body === "object" &&
-    "places" in body &&
-    body.places &&
-    typeof body.places === "object"
-      ? (body.places as Record<string, unknown>)
-      : {};
-
+  const placesRaw = readCountMap(body, "places");
+  const extraRaw = readCountMap(body, "extra");
   return FILIERES.map((f) => {
-    const raw = placesRaw[f.code] ?? placesRaw[f.code.toLowerCase()] ?? "";
-    const n = Number.parseInt(String(raw).trim(), 10);
+    const raw1 = placesRaw[f.code] ?? placesRaw[f.code.toLowerCase()] ?? "";
+    const raw2 = extraRaw[f.code] ?? extraRaw[f.code.toLowerCase()] ?? "";
+    const list1 = Number.parseInt(String(raw1).trim(), 10);
+    const list2 = Number.parseInt(String(raw2).trim(), 10);
     return {
       code: f.code,
       name: f.name,
-      places: Number.isFinite(n) && n > 0 ? n : 0,
+      list1: Number.isFinite(list1) && list1 > 0 ? list1 : 0,
+      list2: Number.isFinite(list2) && list2 > 0 ? list2 : 0,
     };
-  }).filter((f) => f.places > 0);
+  });
 }
 
 async function buildExcel(
@@ -61,7 +65,10 @@ async function buildExcel(
     confirmed: number;
     selected: number;
     shortfall: number;
+    list1: number;
+    seuil: string;
   }[],
+  round: 1 | 2,
 ): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Confirmation";
@@ -69,24 +76,43 @@ async function buildExcel(
   const resume = workbook.addWorksheet("Resume", {
     views: [{ state: "frozen", ySplit: 1 }],
   });
-  resume.addRow([
-    "Code",
-    "Filière",
-    "Places demandées",
-    "Confirmés",
-    "Admis",
-    "Manque",
-  ]);
+  resume.addRow(
+    round === 2
+      ? [
+          "Code",
+          "Filière",
+          "Liste 1",
+          "Seuil liste 1",
+          "Liste 2 demandée",
+          "Confirmés",
+          "Sélectionnés",
+          "Manque",
+        ]
+      : [
+          "Code",
+          "Filière",
+          "Places demandées",
+          "Confirmés",
+          "Admis",
+          "Manque",
+        ],
+  );
   resume.getRow(1).font = { bold: true };
   for (const s of summary) {
-    resume.addRow([
-      s.code,
-      s.name,
-      s.places,
-      s.confirmed,
-      s.selected,
-      s.shortfall,
-    ]);
+    resume.addRow(
+      round === 2
+        ? [
+            s.code,
+            s.name,
+            s.list1,
+            s.seuil,
+            s.places,
+            s.confirmed,
+            s.selected,
+            s.shortfall,
+          ]
+        : [s.code, s.name, s.places, s.confirmed, s.selected, s.shortfall],
+    );
   }
   resume.columns.forEach((col) => {
     col.width = 18;
@@ -163,25 +189,42 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => null);
     const format =
       String(body?.format || "excel").toLowerCase() === "pdf" ? "pdf" : "excel";
-    const placesByCode = parsePlaces(body);
+    const round = Number(body?.round) === 2 ? 2 : 1;
+    const specs = parseRoundSpecs(body);
+    const active = specs.filter((s) =>
+      round === 1 ? s.list1 > 0 : s.list2 > 0,
+    );
 
-    if (placesByCode.length === 0) {
+    if (active.length === 0) {
       return NextResponse.json(
         {
           error:
-            "Indiquez au moins un nombre de places (> 0) pour une filière.",
+            round === 2
+              ? "Indiquez au moins un nombre pour la liste 2 (> 0)."
+              : "Indiquez au moins un nombre de places (> 0) pour une filière.",
+        },
+        { status: 400 },
+      );
+    }
+
+    const missingList1 = active.filter((s) => round === 2 && s.list1 <= 0);
+    if (missingList1.length > 0) {
+      return NextResponse.json(
+        {
+          error: `Liste 2 : indiquez d'abord le nombre de la liste 1 pour ${missingList1
+            .map((s) => s.code)
+            .join(", ")}.`,
         },
         { status: 400 },
       );
     }
 
     const rows = await listConfirmations();
-    const { selected, summary } = selectTopConfirmationsByPlaces(
-      rows,
-      placesByCode,
-    );
+    const { selected, summary } = selectFinalRound(rows, active, round);
 
     const stamp = new Date().toISOString().slice(0, 10);
+    const fileBase =
+      round === 2 ? "admis_liste2" : "admis_inscription";
 
     if (format === "pdf") {
       const buffer = await buildFinalSelectionPdf(
@@ -190,23 +233,32 @@ export async function POST(request: Request) {
           name: g.name,
           rows: g.rows,
         })),
+        null,
+        round === 2
+          ? {
+              docTitle: "Deuxième liste des admis — EST Meknès",
+              listSubtitle:
+                "Deuxième liste — étudiants admis à procéder à l'inscription",
+              totalLabel: (n) => `Liste 2 : ${n} étudiant(s)`,
+            }
+          : undefined,
       );
       return new NextResponse(new Uint8Array(buffer), {
         status: 200,
         headers: {
           "Content-Type": "application/pdf",
-          "Content-Disposition": `attachment; filename="admis_inscription_${stamp}.pdf"`,
+          "Content-Disposition": `attachment; filename="${fileBase}_${stamp}.pdf"`,
         },
       });
     }
 
-    const buffer = await buildExcel(selected, summary);
+    const buffer = await buildExcel(selected, summary, round);
     return new NextResponse(new Uint8Array(buffer), {
       status: 200,
       headers: {
         "Content-Type":
           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "Content-Disposition": `attachment; filename="admis_inscription_${stamp}.xlsx"`,
+        "Content-Disposition": `attachment; filename="${fileBase}_${stamp}.xlsx"`,
       },
     });
   } catch (e) {

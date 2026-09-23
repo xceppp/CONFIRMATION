@@ -6,6 +6,9 @@ import { FILIERES, resolveFiliereFromLabel } from "@/lib/filieres";
 type ConfCounts = Record<string, number>;
 
 const PLACES_STORAGE_KEY = "admin-final-places";
+const EXTRA_STORAGE_KEY = "admin-final-places-2";
+
+type ConfRow = Record<string, string>;
 
 /** Default Places (N) — used until the admin edits (then remembered locally). */
 const DEFAULT_PLACES: Record<string, string> = {
@@ -27,31 +30,49 @@ function emptyPlaces(): Record<string, string> {
   return init;
 }
 
-function loadSavedPlaces(): Record<string, string> {
-  const init = emptyPlaces();
+function loadSavedMap(
+  key: string,
+  init: Record<string, string>,
+): Record<string, string> {
+  const next = { ...init };
   try {
-    const raw = localStorage.getItem(PLACES_STORAGE_KEY);
-    if (!raw) return init;
+    const raw = localStorage.getItem(key);
+    if (!raw) return next;
     const saved = JSON.parse(raw) as Record<string, unknown>;
-    if (!saved || typeof saved !== "object") return init;
+    if (!saved || typeof saved !== "object") return next;
     for (const f of FILIERES) {
       const v = saved[f.code];
       if (v != null && String(v).trim() !== "") {
-        init[f.code] = String(v);
+        next[f.code] = String(v);
       }
     }
   } catch {
     /* ignore corrupt storage */
   }
+  return next;
+}
+
+function emptyExtra(): Record<string, string> {
+  const init: Record<string, string> = {};
+  for (const f of FILIERES) init[f.code] = "";
   return init;
+}
+
+function scoreOf(row: ConfRow): number {
+  const n = Number.parseFloat(String(row.Score || "").replace(",", "."));
+  return Number.isFinite(n) ? n : -Infinity;
 }
 
 export default function AdminFinalPage() {
   const [places, setPlaces] = useState<Record<string, string>>(emptyPlaces);
+  const [extra, setExtra] = useState<Record<string, string>>(emptyExtra);
   const [placesHydrated, setPlacesHydrated] = useState(false);
   const [confirmedByCode, setConfirmedByCode] = useState<ConfCounts>({});
+  const [confRows, setConfRows] = useState<ConfRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [exporting, setExporting] = useState<"excel" | "pdf" | null>(null);
+  const [exporting, setExporting] = useState<
+    "l1-excel" | "l1-pdf" | "l2-excel" | "l2-pdf" | null
+  >(null);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
 
@@ -85,6 +106,7 @@ export default function AdminFinalPage() {
         }
       }
       setConfirmedByCode(counts);
+      setConfRows(rows as ConfRow[]);
     } catch {
       setError("Erreur réseau.");
     } finally {
@@ -93,7 +115,8 @@ export default function AdminFinalPage() {
   }
 
   useEffect(() => {
-    setPlaces(loadSavedPlaces());
+    setPlaces(loadSavedMap(PLACES_STORAGE_KEY, emptyPlaces()));
+    setExtra(loadSavedMap(EXTRA_STORAGE_KEY, emptyExtra()));
     setPlacesHydrated(true);
     void loadCounts();
   }, []);
@@ -102,10 +125,11 @@ export default function AdminFinalPage() {
     if (!placesHydrated) return;
     try {
       localStorage.setItem(PLACES_STORAGE_KEY, JSON.stringify(places));
+      localStorage.setItem(EXTRA_STORAGE_KEY, JSON.stringify(extra));
     } catch {
       /* quota / private mode */
     }
-  }, [places, placesHydrated]);
+  }, [places, extra, placesHydrated]);
 
   const filledCount = useMemo(
     () =>
@@ -116,25 +140,62 @@ export default function AdminFinalPage() {
     [places],
   );
 
-  async function doExport(format: "excel" | "pdf") {
-    setExporting(format);
+  const extraCount = useMemo(
+    () =>
+      FILIERES.filter((f) => {
+        const n = Number.parseInt(extra[f.code] || "", 10);
+        return Number.isFinite(n) && n > 0;
+      }).length,
+    [extra],
+  );
+
+  function seuilOf(code: string): string {
+    const n = Number.parseInt(places[code] || "", 10);
+    if (!Number.isFinite(n) || n <= 0) return "—";
+    const pool = confRows
+      .filter((row) => resolveFiliereFromLabel(String(row.Filiere || row.FiliereCode || ""))?.code === code)
+      .sort((a, b) => scoreOf(b) - scoreOf(a));
+    const last = pool[Math.min(n, pool.length) - 1];
+    if (!last) return "—";
+    return String(last.Score || "—");
+  }
+
+  async function doExport(round: 1 | 2, format: "excel" | "pdf") {
+    const tag = `${round === 1 ? "l1" : "l2"}-${format}` as
+      | "l1-excel"
+      | "l1-pdf"
+      | "l2-excel"
+      | "l2-pdf";
+    setExporting(tag);
     setError("");
     setInfo("");
     try {
       const bodyPlaces: Record<string, number> = {};
+      const bodyExtra: Record<string, number> = {};
       for (const f of FILIERES) {
         const n = Number.parseInt(String(places[f.code] || "").trim(), 10);
+        const m = Number.parseInt(String(extra[f.code] || "").trim(), 10);
         if (Number.isFinite(n) && n > 0) bodyPlaces[f.code] = n;
+        if (Number.isFinite(m) && m > 0) bodyExtra[f.code] = m;
       }
-      if (Object.keys(bodyPlaces).length === 0) {
+      if (round === 1 && Object.keys(bodyPlaces).length === 0) {
         setError("Indiquez au moins un nombre de places (> 0).");
+        return;
+      }
+      if (round === 2 && Object.keys(bodyExtra).length === 0) {
+        setError("Indiquez au moins un nombre pour la liste 2 (> 0).");
         return;
       }
 
       const res = await fetch("/api/admin/final/export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ places: bodyPlaces, format }),
+        body: JSON.stringify({
+          places: bodyPlaces,
+          extra: bodyExtra,
+          format,
+          round,
+        }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -157,9 +218,13 @@ export default function AdminFinalPage() {
       a.remove();
       URL.revokeObjectURL(url);
       setInfo(
-        format === "pdf"
-          ? "PDF des admis téléchargé — listes pour inscription / publication."
-          : "Excel des admis téléchargé — top scores selon les places (usage local).",
+        round === 2
+          ? format === "pdf"
+            ? "PDF liste 2 téléchargé — étudiants juste après le seuil de la liste 1."
+            : "Excel liste 2 téléchargé — suite du classement, sans les étudiants de la liste 1."
+          : format === "pdf"
+            ? "PDF liste 1 téléchargé — top scores selon les places."
+            : "Excel liste 1 téléchargé — top scores selon les places.",
       );
     } catch {
       setError("Erreur réseau pendant l'export.");
@@ -179,38 +244,56 @@ export default function AdminFinalPage() {
             Final
           </h2>
           <p className="mt-1 max-w-2xl text-[var(--muted)]">
-            Indiquez le nombre de places par filière (valeurs mémorisées et
-            modifiables). L&apos;export prend les confirmés classés par score
-            (du plus élevé) — ce sont les{" "}
-            <strong className="font-semibold text-[var(--ink)]">admis</strong>{" "}
-            à procéder à l&apos;inscription. Excel pour le local, PDF pour la
-            publication.
+            Liste 1 : les N premiers confirmés par score. Le dernier fixe le
+            seuil. Liste 2 : vous indiquez combien d&apos;étudiants ajouter.
+            L&apos;export prend les suivants, juste après ce seuil, sans
+            reprendre la liste 1.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => void loadCounts()}
-            className="rounded-xl border border-[var(--line)] bg-white px-4 py-2.5 text-sm font-semibold hover:bg-[var(--bg)]"
-          >
-            Actualiser
-          </button>
-          <button
-            type="button"
-            disabled={exporting !== null || filledCount === 0}
-            onClick={() => void doExport("excel")}
-            className="rounded-xl bg-[var(--brand)] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[var(--brand-dark)] disabled:opacity-50"
-          >
-            {exporting === "excel" ? "Excel…" : "Exporter Excel"}
-          </button>
-          <button
-            type="button"
-            disabled={exporting !== null || filledCount === 0}
-            onClick={() => void doExport("pdf")}
-            className="rounded-xl bg-[var(--accent)] px-4 py-2.5 text-sm font-semibold text-white hover:brightness-95 disabled:opacity-50"
-          >
-            {exporting === "pdf" ? "PDF…" : "Exporter PDF"}
-          </button>
+        <div className="flex flex-col items-end gap-2">
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => void loadCounts()}
+              className="rounded-xl border border-[var(--line)] bg-white px-4 py-2.5 text-sm font-semibold hover:bg-[var(--bg)]"
+            >
+              Actualiser
+            </button>
+            <button
+              type="button"
+              disabled={exporting !== null || filledCount === 0}
+              onClick={() => void doExport(1, "excel")}
+              className="rounded-xl bg-[var(--brand)] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[var(--brand-dark)] disabled:opacity-50"
+            >
+              {exporting === "l1-excel" ? "Excel…" : "Liste 1 Excel"}
+            </button>
+            <button
+              type="button"
+              disabled={exporting !== null || filledCount === 0}
+              onClick={() => void doExport(1, "pdf")}
+              className="rounded-xl bg-[var(--accent)] px-4 py-2.5 text-sm font-semibold text-white hover:brightness-95 disabled:opacity-50"
+            >
+              {exporting === "l1-pdf" ? "PDF…" : "Liste 1 PDF"}
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={exporting !== null || extraCount === 0}
+              onClick={() => void doExport(2, "excel")}
+              className="rounded-xl border border-[var(--brand)] bg-white px-4 py-2.5 text-sm font-semibold text-[var(--brand)] hover:bg-[var(--bg)] disabled:opacity-50"
+            >
+              {exporting === "l2-excel" ? "Excel…" : "Liste 2 Excel"}
+            </button>
+            <button
+              type="button"
+              disabled={exporting !== null || extraCount === 0}
+              onClick={() => void doExport(2, "pdf")}
+              className="rounded-xl border border-[var(--accent)] bg-white px-4 py-2.5 text-sm font-semibold text-[var(--accent)] hover:bg-[var(--bg)] disabled:opacity-50"
+            >
+              {exporting === "l2-pdf" ? "PDF…" : "Liste 2 PDF"}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -229,13 +312,15 @@ export default function AdminFinalPage() {
         {loading ? (
           <p className="text-sm text-[var(--muted)]">Chargement…</p>
         ) : (
-          <table className="w-full min-w-[640px] text-left text-sm">
+          <table className="w-full min-w-[860px] text-left text-sm">
             <thead>
               <tr className="border-b border-[var(--line)] text-[var(--muted)]">
                 <th className="py-2 pr-3 font-medium">Code</th>
                 <th className="py-2 pr-3 font-medium">Filière</th>
                 <th className="py-2 pr-3 font-medium">Confirmés</th>
-                <th className="py-2 font-medium">Places (N)</th>
+                <th className="py-2 pr-3 font-medium">Liste 1 (N)</th>
+                <th className="py-2 pr-3 font-medium">Seuil</th>
+                <th className="py-2 font-medium">Liste 2 (+)</th>
               </tr>
             </thead>
             <tbody>
@@ -261,16 +346,36 @@ export default function AdminFinalPage() {
                         </span>
                       ) : null}
                     </td>
+                    <td className="py-3 pr-3">
+                      <input
+                        type="number"
+                        min={0}
+                        step={1}
+                        inputMode="numeric"
+                        placeholder="ex. 50"
+                        value={places[f.code]}
+                        onChange={(e) =>
+                          setPlaces((prev) => ({
+                            ...prev,
+                            [f.code]: e.target.value,
+                          }))
+                        }
+                        className="w-28 rounded-xl border border-[var(--line)] bg-white px-3 py-2 outline-none ring-[var(--brand)] focus:ring-2"
+                      />
+                    </td>
+                    <td className="py-3 pr-3 font-medium text-[var(--ink)]">
+                      {seuilOf(f.code)}
+                    </td>
                     <td className="py-3">
                       <input
                         type="number"
                         min={0}
                         step={1}
                         inputMode="numeric"
-                        placeholder="ex. 90"
-                        value={places[f.code]}
+                        placeholder="ex. 25"
+                        value={extra[f.code] || ""}
                         onChange={(e) =>
-                          setPlaces((prev) => ({
+                          setExtra((prev) => ({
                             ...prev,
                             [f.code]: e.target.value,
                           }))

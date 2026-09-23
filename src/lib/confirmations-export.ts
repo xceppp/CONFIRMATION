@@ -292,3 +292,89 @@ export function selectTopConfirmationsByPlaces(
 
   return { selected, summary };
 }
+
+export type FinalRoundSpec = {
+  code: string;
+  name: string;
+  /** How many students were published on list 1 (also the skip point). */
+  list1: number;
+  /** How many additional students to take for list 2. */
+  list2: number;
+};
+
+/**
+ * List 1 = top `list1` by score.
+ * List 2 = the next `list2` after those, so nobody from list 1 is repeated.
+ */
+export function selectFinalRound(
+  rows: StudentRow[],
+  specs: FinalRoundSpec[],
+  round: 1 | 2,
+): {
+  selected: { code: string; name: string; places: number; rows: StudentRow[] }[];
+  summary: {
+    code: string;
+    name: string;
+    places: number;
+    confirmed: number;
+    selected: number;
+    shortfall: number;
+    list1: number;
+    seuil: string;
+  }[];
+} {
+  const selected: {
+    code: string;
+    name: string;
+    places: number;
+    rows: StudentRow[];
+  }[] = [];
+  const summary: {
+    code: string;
+    name: string;
+    places: number;
+    confirmed: number;
+    selected: number;
+    shortfall: number;
+    list1: number;
+    seuil: string;
+  }[] = [];
+
+  for (const f of specs) {
+    const list1 = Math.max(0, Math.floor(f.list1));
+    const list2 = Math.max(0, Math.floor(f.list2));
+    const want = round === 1 ? list1 : list2;
+    if (want <= 0) continue;
+    if (round === 2 && list1 <= 0) continue;
+
+    const pool = rows
+      .filter((r) => rowMatchesFiliere(r, f.code, f.name))
+      .sort((a, b) => parseScore(b) - parseScore(a));
+
+    const first = pool.slice(0, list1);
+    const lastOfFirst = first[first.length - 1];
+    const seuil =
+      lastOfFirst != null ? cellValue(lastOfFirst, "Score") : "";
+    const picked =
+      round === 1 ? first : pool.slice(list1, list1 + list2);
+
+    selected.push({
+      code: f.code,
+      name: f.name,
+      places: want,
+      rows: picked,
+    });
+    summary.push({
+      code: f.code,
+      name: f.name,
+      places: want,
+      confirmed: pool.length,
+      selected: picked.length,
+      shortfall: Math.max(0, want - picked.length),
+      list1,
+      seuil,
+    });
+  }
+
+  return { selected, summary };
+}

@@ -365,13 +365,23 @@ const COLS_CHANGE = [
 export async function buildFinalSelectionPdf(
   groups: PdfFiliereGroup[],
   dejaInscrits?: DejaInscritMap | null,
+  pdfOptions?: {
+    docTitle?: string;
+    listSubtitle?: string;
+    totalLabel?: (n: number) => string;
+  },
 ): Promise<Buffer> {
   if (!dejaInscrits || dejaInscrits.size === 0) {
     return buildGroupedListsPdf(groups, {
-      docTitle: "Listes des admis à l'inscription — EST Meknès",
-      listSubtitle: "Liste des étudiants admis à procéder à l'inscription",
+      docTitle:
+        pdfOptions?.docTitle ||
+        "Listes des admis à l'inscription — EST Meknès",
+      listSubtitle:
+        pdfOptions?.listSubtitle ||
+        "Liste des étudiants admis à procéder à l'inscription",
       emptyMessage: "Aucune sélection finale à publier.",
-      totalLabel: (n) => `Admis : ${n} étudiant(s)`,
+      totalLabel:
+        pdfOptions?.totalLabel || ((n) => `Admis : ${n} étudiant(s)`),
     });
   }
 
