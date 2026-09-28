@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { liste1CutoffIndex } from "@/lib/confirmations-export";
+import { isHorsDelai, liste1CutoffIndex } from "@/lib/confirmations-export";
 import { FILIERES, resolveFiliereFromLabel } from "@/lib/filieres";
 
 type ConfCounts = Record<string, number>;
@@ -71,9 +71,10 @@ export default function AdminFinalPage() {
   const [placesHydrated, setPlacesHydrated] = useState(false);
   const [confirmedByCode, setConfirmedByCode] = useState<ConfCounts>({});
   const [confRows, setConfRows] = useState<ConfRow[]>([]);
+  const [horsCount, setHorsCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState<
-    "l1-excel" | "l1-pdf" | "l2-excel" | "l2-pdf" | null
+    "l1-excel" | "l1-pdf" | "l2-excel" | "l2-pdf" | "hors" | null
   >(null);
   const [list1Unlocked, setList1Unlocked] = useState(false);
   const [unlockOpen, setUnlockOpen] = useState(false);
@@ -94,8 +95,9 @@ export default function AdminFinalPage() {
       const counts: ConfCounts = {};
       for (const f of FILIERES) counts[f.code] = 0;
 
-      const rows = Array.isArray(data.rows) ? data.rows : [];
-      if (rows.length > 0) {
+      const allRows: ConfRow[] = Array.isArray(data.rows) ? data.rows : [];
+      const rows = allRows.filter((row) => !isHorsDelai(row));
+      if (allRows.length > 0) {
         for (const row of rows) {
           const label = String(row.Filiere || row.FiliereCode || "");
           const match = resolveFiliereFromLabel(label);
@@ -111,7 +113,8 @@ export default function AdminFinalPage() {
         }
       }
       setConfirmedByCode(counts);
-      setConfRows(rows as ConfRow[]);
+      setConfRows(rows);
+      setHorsCount(allRows.filter((row) => isHorsDelai(row)).length);
     } catch {
       setError("Erreur réseau.");
     } finally {
@@ -170,6 +173,7 @@ export default function AdminFinalPage() {
     const n = Number.parseInt(places[code] || "", 10);
     if (!Number.isFinite(n) || n <= 0) return "—";
     const pool = confRows
+      .filter((row) => !isHorsDelai(row))
       .filter((row) => resolveFiliereFromLabel(String(row.Filiere || row.FiliereCode || ""))?.code === code)
       .sort((a, b) => scoreOf(b) - scoreOf(a));
     const end = liste1CutoffIndex(
@@ -255,6 +259,39 @@ export default function AdminFinalPage() {
     }
   }
 
+  async function exportHorsDelai() {
+    setExporting("hors");
+    setError("");
+    setInfo("");
+    try {
+      const res = await fetch("/api/admin/final/hors-delai");
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || "Export hors délai impossible");
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download =
+        res.headers
+          .get("Content-Disposition")
+          ?.match(/filename="(.+)"/)?.[1] || "hors_delai.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setInfo(
+        "Excel hors délai téléchargé — une feuille par filière, trié par score, avec téléphone.",
+      );
+    } catch {
+      setError("Erreur réseau pendant l'export hors délai.");
+    } finally {
+      setExporting(null);
+    }
+  }
+
   return (
     <div>
       <div className="flex flex-wrap items-end justify-between gap-4">
@@ -268,9 +305,10 @@ export default function AdminFinalPage() {
           <p className="mt-1 max-w-2xl text-[var(--muted)]">
             Liste 1 : les N premiers confirmés par score. Le dernier fixe le
             seuil. GI garde le seuil publié 16.7928 : tout confirmé à ce
-            score ou au-dessus reste en liste 1. Liste 2 : vous indiquez
-            combien d&apos;étudiants ajouter. L&apos;export prend les
-            suivants, juste après ce seuil, sans reprendre la liste 1.
+            score ou au-dessus reste en liste 1. Les hors délai restent à
+            part. Liste 2 : vous indiquez combien d&apos;étudiants ajouter.
+            L&apos;export prend les suivants, juste après ce seuil, sans
+            reprendre la liste 1.
           </p>
         </div>
         <div className="flex flex-col items-end gap-2">
@@ -315,6 +353,16 @@ export default function AdminFinalPage() {
               className="rounded-xl border border-[var(--accent)] bg-white px-4 py-2.5 text-sm font-semibold text-[var(--accent)] hover:bg-[var(--bg)] disabled:opacity-50"
             >
               {exporting === "l2-pdf" ? "PDF…" : "Liste 2 PDF"}
+            </button>
+            <button
+              type="button"
+              disabled={exporting !== null}
+              onClick={() => void exportHorsDelai()}
+              className="rounded-xl border border-[var(--line)] bg-white px-4 py-2.5 text-sm font-semibold hover:bg-[var(--bg)] disabled:opacity-50"
+            >
+              {exporting === "hors"
+                ? "Hors délai…"
+                : `Hors délai${horsCount > 0 ? ` (${horsCount})` : ""}`}
             </button>
           </div>
         </div>

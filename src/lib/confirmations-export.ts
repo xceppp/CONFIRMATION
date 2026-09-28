@@ -271,6 +271,7 @@ export function selectTopConfirmationsByPlaces(
 
     const pool = rows
       .filter((r) => rowMatchesFiliere(r, f.code, f.name))
+      .filter((r) => !isHorsDelai(r))
       .sort((a, b) => parseScore(b) - parseScore(a));
 
     const top = pool.slice(0, places);
@@ -312,6 +313,14 @@ export const PUBLISHED_LIST1_SEUIL: Record<string, number> = {
 };
 
 /** How many leading rows of a score-desc pool belong on liste 1. */
+/** Late manual confirmation: kept out of liste 1 and liste 2. */
+export function isHorsDelai(row: { HorsDelai?: string }): boolean {
+  const v = String(row.HorsDelai || "")
+    .trim()
+    .toLowerCase();
+  return v === "1" || v === "oui" || v === "true" || v === "hors delai" || v === "hors délai";
+}
+
 export function liste1CutoffIndex(
   code: string,
   list1: number,
@@ -375,6 +384,7 @@ export function selectFinalRound(
 
     const pool = rows
       .filter((r) => rowMatchesFiliere(r, f.code, f.name))
+      .filter((r) => !isHorsDelai(r))
       .sort((a, b) => parseScore(b) - parseScore(a));
 
     const end = liste1CutoffIndex(

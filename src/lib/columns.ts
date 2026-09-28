@@ -41,6 +41,17 @@ export const CONFIRMATIONS_HEADERS = [
   "DateConfirmation",
 ] as const;
 
+/** Feuille à part — confirmations après la clôture. Ne pas mélanger aux listes. */
+export const HORS_DELAI_HEADERS = [
+  "CNE",
+  "NomComplet",
+  "Filiere",
+  "Score",
+  "Agent",
+  "DateConfirmation",
+  "Telephone",
+] as const;
+
 export type StudentRow = Record<string, string>;
 
 /** Feuille Agents — comptes créés par l'admin */

@@ -159,7 +159,7 @@ export default function AgentPage() {
     });
   }
 
-  async function confirm() {
+  async function confirm(horsDelai = false) {
     if (!canConfirm || !result?.student) return;
     setConfirming(true);
     setError("");
@@ -171,6 +171,7 @@ export default function AgentPage() {
         body: JSON.stringify({
           code: result.student.Code,
           filiereCode: selected,
+          horsDelai,
         }),
       });
       const data = await res.json();
@@ -191,7 +192,9 @@ export default function AgentPage() {
         return;
       }
       setSuccess(
-        `Confirmé : ${data.filiere}${data.agent ? ` (par ${data.agent})` : ""}`,
+        horsDelai
+          ? `Hors délai : ${data.filiere}. Hors des listes 1 et 2.`
+          : `Confirmé : ${data.filiere}${data.agent ? ` (par ${data.agent})` : ""}`,
       );
       setResult(null);
       setSelected("");
@@ -439,11 +442,22 @@ export default function AgentPage() {
               <button
                 type="button"
                 disabled={!canConfirm}
-                onClick={confirm}
+                onClick={() => void confirm(false)}
                 className="mt-5 w-full rounded-xl bg-[var(--accent)] px-4 py-3 text-lg font-semibold text-white hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {confirming ? "Enregistrement…" : "Confirmer cette filière"}
               </button>
+              <button
+                type="button"
+                disabled={!canConfirm}
+                onClick={() => void confirm(true)}
+                className="mt-2 w-full rounded-xl border border-[var(--brand)] bg-white px-4 py-3 text-base font-semibold text-[var(--brand)] hover:bg-[var(--bg)] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Confirmer hors délai
+              </button>
+              <p className="mt-2 text-center text-xs text-[var(--muted)]">
+                Hors délai : enregistré à part, absent des listes 1 et 2.
+              </p>
             </div>
           )}
         </section>

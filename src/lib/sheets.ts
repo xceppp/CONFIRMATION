@@ -3,6 +3,7 @@ import {
   AGENTS_HEADERS,
   CONFIRMATIONS_HEADERS,
   ETUDIANTS_HEADERS,
+  HORS_DELAI_HEADERS,
   type AgentRow,
   type StudentRow,
 } from "./columns";
@@ -10,6 +11,8 @@ import { getFiliereByCode } from "./filieres";
 import { sortConfirmationsByFiliereThenScore } from "./confirmations-export";
 
 const SHEET_CONFIRMATIONS = "Confirmations";
+/** Confirmations après la clôture. Même CNE, liste à part. */
+const SHEET_HORS_DELAI = "HorsDelai";
 /** Append-only mirror — never cleared by journal wipe. Used to repair lost rows. */
 const SHEET_CONFIRMATIONS_AUDIT = "ConfirmationsAudit";
 const SHEET_AGENTS = "Agents";
@@ -319,6 +322,8 @@ function normalizeConfirmationRow(row: StudentRow): StudentRow {
     Score: String(row.Score || "").trim(),
     Agent: row.Agent || "",
     DateConfirmation: row.DateConfirmation || "",
+    HorsDelai: row.HorsDelai || "",
+    Telephone: row.Telephone || "",
   };
 }
 
@@ -676,6 +681,39 @@ async function fetchConfirmationsIndex(): Promise<
   );
 }
 
+async function loadHorsDelaiByCode(): Promise<Map<string, StudentRow>> {
+  const found = new Map<string, StudentRow>();
+  const titles = await listSheetTitles();
+  if (!titles.includes(SHEET_HORS_DELAI)) return found;
+
+  const { sheets, sheetId } = getSheets();
+  const res = await withSheetsRetry("horsdelai.get", () =>
+    sheets.spreadsheets.values.get({
+      spreadsheetId: sheetId,
+      range: `${SHEET_HORS_DELAI}!A:Z`,
+    }),
+  );
+  const values = (res.data.values || []).map((r) => r.map(String));
+  if (values.length < 2) return found;
+  const objects = rowsToObjects(values[0], values.slice(1));
+  for (const row of objects) {
+    const code = normCode(row.CNE || "");
+    if (!code || found.has(code)) continue;
+    found.set(code, row);
+  }
+  return found;
+}
+
+function stampHorsDelai(rows: StudentRow[], marks: Map<string, StudentRow>) {
+  if (marks.size === 0) return;
+  for (const row of rows) {
+    const mark = marks.get(normCode(row.CNE || row.Code || ""));
+    if (!mark) continue;
+    row.HorsDelai = "1";
+    if (mark.Telephone) row.Telephone = mark.Telephone;
+  }
+}
+
 /**
  * Reload Confirmations from Google Sheets into RAM.
  * Critical on Vercel: each serverless instance has its own memory —
@@ -712,6 +750,8 @@ export async function refreshConfirmations(options?: {
         );
         const raw = (res.data.values || []).map((r) => r.map(String));
         const conf = buildConfirmationsIndex(raw);
+        const hors = await loadHorsDelaiByCode();
+        stampHorsDelai(conf.confirmationList, hors);
         const c = await getCache();
         c.confirmationsByCode = conf.confirmationsByCode;
         c.confirmationCount = conf.confirmationCount;
@@ -822,6 +862,7 @@ export async function isAlreadyConfirmed(
 export async function appendConfirmation(
   student: StudentRow,
   agentName: string,
+  options?: { horsDelai?: boolean },
 ): Promise<void> {
   const needle = normCode(student.Code || "");
   if (!needle) throw new Error("Code Massar manquant.");
@@ -860,10 +901,35 @@ export async function appendConfirmation(
       DateConfirmation: new Date().toLocaleString("fr-FR", {
         timeZone: "Africa/Casablanca",
       }),
+      HorsDelai: options?.horsDelai ? "1" : "",
+      Telephone: String(student.Telephone || "").trim(),
     });
 
     // Append only to Confirmations + Audit mirror. Never clear/rewrite.
     await ensureWorkbookReady();
+    if (options?.horsDelai) {
+      const { sheets, sheetId } = getSheets();
+      await ensureSheetExists(
+        sheets,
+        sheetId,
+        SHEET_HORS_DELAI,
+        HORS_DELAI_HEADERS,
+      );
+      await appendSheetRow(
+        SHEET_HORS_DELAI,
+        [
+          saved.CNE,
+          saved.NomComplet,
+          saved.Filiere,
+          saved.Score,
+          saved.Agent || "",
+          saved.DateConfirmation || "",
+          saved.Telephone || "",
+        ],
+        "horsdelai.append",
+        8,
+      );
+    }
     const line = confirmationToSheetLine(saved);
     await appendSheetRow(SHEET_CONFIRMATIONS, line, "confirmations.append", 8);
     // Best-effort second copy — never blocks success if audit lags under quota.
@@ -967,8 +1033,11 @@ export async function getStats(): Promise<{
   };
 }
 
-export async function listConfirmations(limit?: number): Promise<StudentRow[]> {
-  await refreshConfirmations();
+export async function listConfirmations(
+  limit?: number,
+  options?: { force?: boolean },
+): Promise<StudentRow[]> {
+  await refreshConfirmations({ force: options?.force });
   const c = await getCache();
   if (limit == null || limit <= 0) return [...c.confirmationList];
   return c.confirmationList.slice(0, limit);

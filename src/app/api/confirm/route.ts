@@ -40,14 +40,18 @@ export async function POST(request: Request) {
     }
 
     const payload: StudentRow = { ...match };
-    await appendConfirmation(payload, agentName);
+    const horsDelai = body?.horsDelai === true;
+    await appendConfirmation(payload, agentName, { horsDelai });
 
     return NextResponse.json({
       ok: true,
-      message: "Confirmation enregistrée.",
+      message: horsDelai
+        ? "Confirmation hors délai enregistrée. Elle reste hors des listes 1 et 2."
+        : "Confirmation enregistrée.",
       filiere: match.Filiere,
       filiereCode: match.FiliereCode,
       agent: agentName,
+      horsDelai,
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Erreur serveur";
