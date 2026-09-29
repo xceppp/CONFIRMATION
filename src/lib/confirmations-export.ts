@@ -362,7 +362,12 @@ export function liste1CutoffIndex(
       if (!(score + 1e-6 >= floor)) break;
       atOrAbove += 1;
     }
+    // Expand to cover the published floor (GI-style), but never
+    // pull anyone strictly below that floor onto liste 1.
     end = Math.max(end, atOrAbove);
+    while (end > 0 && scoresDesc[end - 1] + 1e-6 < floor) {
+      end -= 1;
+    }
   }
   return end;
 }
