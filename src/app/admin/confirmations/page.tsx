@@ -61,6 +61,8 @@ export default function AdminConfirmationsPage() {
   const [exportCols, setExportCols] = useState<string[]>([...DEFAULT_EXPORT_KEYS]);
   const [exporting, setExporting] = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  const [verifyInfo, setVerifyInfo] = useState("");
   const [clearing, setClearing] = useState(false);
   const [clearOpen, setClearOpen] = useState(false);
   const [clearPassword, setClearPassword] = useState("");
@@ -232,6 +234,51 @@ export default function AdminConfirmationsPage() {
     }
   }
 
+  async function doVerifyFiliere() {
+    setVerifying(true);
+    setError("");
+    setVerifyInfo("");
+    try {
+      const probe = await fetch("/api/admin/verify-filiere");
+      const data = await probe.json().catch(() => ({}));
+      if (!probe.ok) {
+        setError(data.error || "Vérification impossible");
+        return;
+      }
+      if (!data.mismatches) {
+        setVerifyInfo(
+          `OK — ${data.checked} confirmations. Chaque CNE existe bien dans la filière confirmée.`,
+        );
+        return;
+      }
+      setVerifyInfo(
+        `${data.mismatches} anomalie(s) sur ${data.checked} confirmations. Excel téléchargé.`,
+      );
+      const res = await fetch("/api/admin/verify-filiere?format=excel");
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setError(err.error || "Export des anomalies impossible");
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download =
+        res.headers
+          .get("Content-Disposition")
+          ?.match(/filename="(.+)"/)?.[1] || "anomalies_filiere.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      setError("Erreur réseau pendant la vérification.");
+    } finally {
+      setVerifying(false);
+    }
+  }
+
   async function doClearLog() {
     if (!clearPassword.trim()) {
       setError("Mot de passe requis pour vider le journal.");
@@ -310,6 +357,14 @@ export default function AdminConfirmationsPage() {
             className="rounded-xl bg-[var(--accent)] px-4 py-2.5 text-sm font-semibold text-white hover:brightness-95 disabled:opacity-50"
           >
             {exportingPdf ? "PDF…" : "Exporter PDF"}
+          </button>
+          <button
+            type="button"
+            disabled={verifying || loading}
+            onClick={() => void doVerifyFiliere()}
+            className="rounded-xl border border-[var(--brand)] bg-white px-4 py-2.5 text-sm font-semibold text-[var(--brand)] hover:bg-[var(--bg)] disabled:opacity-50"
+          >
+            {verifying ? "Vérification…" : "Vérifier filières"}
           </button>
         </div>
       </div>
@@ -454,6 +509,11 @@ export default function AdminConfirmationsPage() {
       {error ? (
         <p className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-[var(--danger)]">
           {error}
+        </p>
+      ) : null}
+      {verifyInfo ? (
+        <p className="mt-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-[var(--ok)]">
+          {verifyInfo}
         </p>
       ) : null}
 
