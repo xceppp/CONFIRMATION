@@ -79,27 +79,28 @@ export async function GET(request: Request) {
       });
     }
 
-    const first = rows[0];
-    return NextResponse.json({
-      found: true,
-      alreadyConfirmed: Boolean(confirmed),
-      confirmation: confirmed,
-      student: {
-        Code: first.Code,
-        NomFr: first.NomFr,
-        PrenomFr: first.PrenomFr,
-        Cin: first.Cin,
-        Telephone: first.Telephone,
-        Email: first.Email,
-        Score: first.Score,
-      },
-      filieres: rows.map((r) => ({
-        FiliereCode: r.FiliereCode,
-        Filiere: r.Filiere,
-        Score: r.Score,
-        row: r,
-      })),
-    });
+      const first = rows[0];
+      return NextResponse.json({
+        found: true,
+        alreadyConfirmed: Boolean(confirmed),
+        confirmation: confirmed,
+        student: {
+          Code: first.Code,
+          NomFr: first.NomFr,
+          PrenomFr: first.PrenomFr,
+          Cin: first.Cin,
+          Telephone: first.Telephone,
+          Email: first.Email,
+          // Score is filière-specific — only per-option scores are authoritative.
+          Score: "",
+        },
+        filieres: rows.map((r) => ({
+          FiliereCode: r.FiliereCode,
+          Filiere: r.Filiere,
+          Score: r.Score,
+          row: r,
+        })),
+      });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Erreur serveur";
     return NextResponse.json({ error: message }, { status: 500 });

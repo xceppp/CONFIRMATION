@@ -7,7 +7,7 @@ import {
   type AgentRow,
   type StudentRow,
 } from "./columns";
-import { getFiliereByCode } from "./filieres";
+import { getFiliereByCode, resolveFiliereFromLabel } from "./filieres";
 import { sortConfirmationsByFiliereThenScore } from "./confirmations-export";
 
 const SHEET_CONFIRMATIONS = "Confirmations";
@@ -325,6 +325,86 @@ function normalizeConfirmationRow(row: StudentRow): StudentRow {
     HorsDelai: row.HorsDelai || "",
     Telephone: row.Telephone || "",
   };
+}
+
+function parseScoreNum(v: string | undefined): number {
+  const n = Number.parseFloat(String(v || "").replace(",", "."));
+  return Number.isFinite(n) ? n : Number.NaN;
+}
+
+function scoresMatch(a: string | undefined, b: string | undefined): boolean {
+  const na = parseScoreNum(a);
+  const nb = parseScoreNum(b);
+  return Number.isFinite(na) && Number.isFinite(nb) && Math.abs(na - nb) < 1e-4;
+}
+
+/**
+ * DB row for this CNE on the confirmed filière only.
+ * Score is filière-specific — never reuse another filière's score.
+ */
+export function findEtudiantForConfirmedFiliere(
+  etudiantsByCode: Map<string, StudentRow[]>,
+  conf: StudentRow,
+): StudentRow | undefined {
+  const code = normCode(conf.CNE || conf.Code || "");
+  if (!code) return undefined;
+  const rows = etudiantsByCode.get(code);
+  if (!rows?.length) return undefined;
+
+  const wantCode = String(conf.FiliereCode || "")
+    .trim()
+    .toUpperCase();
+  if (wantCode) {
+    const hit = rows.find(
+      (r) => String(r.FiliereCode || "").toUpperCase() === wantCode,
+    );
+    if (hit) return hit;
+  }
+
+  const resolved = resolveFiliereFromLabel(
+    conf.Filiere || conf.FiliereCode || "",
+  );
+  if (!resolved) return undefined;
+  return rows.find(
+    (r) => String(r.FiliereCode || "").toUpperCase() === resolved.code,
+  );
+}
+
+/**
+ * Force each confirmation Score to the waiting-list score of the confirmed
+ * filière. Fixes rows where another filière's score was stored by mistake.
+ */
+export function hydrateConfirmationScoresFromDb(
+  list: StudentRow[],
+  etudiantsByCode: Map<string, StudentRow[]>,
+): { rows: StudentRow[]; fixed: number; missingInDb: number } {
+  let fixed = 0;
+  let missingInDb = 0;
+  const rows = list.map((row) => {
+    const db = findEtudiantForConfirmedFiliere(etudiantsByCode, row);
+    if (!db) {
+      missingInDb += 1;
+      return row;
+    }
+    const dbScore = String(db.Score || "").trim();
+    if (!dbScore) return row;
+    const same = scoresMatch(row.Score, dbScore);
+    if (
+      same &&
+      (!row.FiliereCode || row.FiliereCode === db.FiliereCode) &&
+      (!db.Filiere || row.Filiere === db.Filiere)
+    ) {
+      return row;
+    }
+    if (!same) fixed += 1;
+    return normalizeConfirmationRow({
+      ...row,
+      Score: dbScore,
+      FiliereCode: db.FiliereCode || row.FiliereCode || "",
+      Filiere: db.Filiere || row.Filiere || "",
+    });
+  });
+  return { rows, fixed, missingInDb };
 }
 
 function confirmationToSheetLine(row: StudentRow): string[] {
@@ -779,14 +859,29 @@ export async function refreshConfirmations(options?: {
         const hors = await loadHorsDelaiByCode();
         stampHorsDelai(conf.confirmationList, hors);
         const merged = mergeHorsDelaiOnly(conf.confirmationList, hors);
-        for (const row of merged) {
-          const code = normCode(row.CNE || row.Code || "");
-          if (code) conf.confirmationsByCode.set(code, row);
-        }
+
         const c = await getCache();
-        c.confirmationsByCode = conf.confirmationsByCode;
-        c.confirmationCount = merged.length;
-        c.confirmationList = sortConfirmationsByFiliereThenScore(merged);
+        // Correct scores from filière DB when students are already warm.
+        const hydrated = hydrateConfirmationScoresFromDb(
+          merged,
+          c.etudiantsByCode,
+        );
+        if (hydrated.fixed > 0) {
+          console.warn(
+            `[sheets] corrected ${hydrated.fixed} confirmation score(s) from filière DB`,
+          );
+        }
+
+        const byCode = new Map<string, StudentRow>();
+        for (const row of hydrated.rows) {
+          const code = normCode(row.CNE || row.Code || "");
+          if (code) byCode.set(code, row);
+        }
+        c.confirmationsByCode = byCode;
+        c.confirmationCount = hydrated.rows.length;
+        c.confirmationList = sortConfirmationsByFiliereThenScore(
+          hydrated.rows,
+        );
         confirmationsFetchedAt = Date.now();
       } catch (e) {
         if (isQuotaError(e)) {
@@ -917,21 +1012,52 @@ export async function appendConfirmation(
       throw new Error(alreadyConfirmedMessage(existing));
     }
 
+    // Always take Score from the filière DB row — never trust a stale/wrong score.
+    try {
+      await refreshStudents({ force: false });
+    } catch (e) {
+      if (!isQuotaError(e)) throw e;
+    }
+    c = await getCache();
+    const dbRow = findEtudiantForConfirmedFiliere(c.etudiantsByCode, {
+      CNE: needle,
+      Code: needle,
+      Filiere: student.Filiere || student.FiliereCode || "",
+      FiliereCode: student.FiliereCode || "",
+    });
+    const dbScore = String(dbRow?.Score || "").trim();
+    const fallbackScore = String(student.Score || "").trim();
+    if (!dbScore && !fallbackScore) {
+      throw new Error(
+        "Score introuvable pour cette filière. Confirmation refusée.",
+      );
+    }
+    if (!dbScore) {
+      console.warn(
+        `[sheets] confirm ${needle}: no LA row for filière — keeping provided score ${fallbackScore}`,
+      );
+    }
+
     const saved = normalizeConfirmationRow({
       CNE: needle,
       Code: needle,
-      NomComplet: `${student.PrenomFr || ""} ${student.NomFr || ""}`.trim(),
-      PrenomFr: student.PrenomFr || "",
-      NomFr: student.NomFr || "",
-      Filiere: student.Filiere || student.FiliereCode || "",
-      FiliereCode: student.FiliereCode || "",
-      Score: student.Score || "",
+      NomComplet:
+        `${student.PrenomFr || dbRow?.PrenomFr || ""} ${student.NomFr || dbRow?.NomFr || ""}`.trim() ||
+        String(student.NomComplet || dbRow?.NomComplet || "").trim(),
+      PrenomFr: student.PrenomFr || dbRow?.PrenomFr || "",
+      NomFr: student.NomFr || dbRow?.NomFr || "",
+      Filiere:
+        dbRow?.Filiere || student.Filiere || student.FiliereCode || "",
+      FiliereCode: dbRow?.FiliereCode || student.FiliereCode || "",
+      Score: dbScore || fallbackScore,
       Agent: agent,
       DateConfirmation: new Date().toLocaleString("fr-FR", {
         timeZone: "Africa/Casablanca",
       }),
       HorsDelai: options?.horsDelai ? "1" : "",
-      Telephone: String(student.Telephone || "").trim(),
+      Telephone: String(
+        student.Telephone || dbRow?.Telephone || "",
+      ).trim(),
     });
 
     // Append only to Confirmations + Audit mirror. Never clear/rewrite.
@@ -1066,8 +1192,28 @@ export async function listConfirmations(
   limit?: number,
   options?: { force?: boolean },
 ): Promise<StudentRow[]> {
+  try {
+    await refreshStudents({ force: false });
+  } catch (e) {
+    if (!isQuotaError(e)) throw e;
+  }
   await refreshConfirmations({ force: options?.force });
   const c = await getCache();
+  // Re-hydrate in case students loaded after confirmations.
+  const hydrated = hydrateConfirmationScoresFromDb(
+    c.confirmationList,
+    c.etudiantsByCode,
+  );
+  if (hydrated.fixed > 0) {
+    const byCode = new Map<string, StudentRow>();
+    for (const row of hydrated.rows) {
+      const code = normCode(row.CNE || row.Code || "");
+      if (code) byCode.set(code, row);
+    }
+    c.confirmationsByCode = byCode;
+    c.confirmationCount = hydrated.rows.length;
+    c.confirmationList = sortConfirmationsByFiliereThenScore(hydrated.rows);
+  }
   if (limit == null || limit <= 0) return [...c.confirmationList];
   return c.confirmationList.slice(0, limit);
 }
