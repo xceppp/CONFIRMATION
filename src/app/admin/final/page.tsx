@@ -303,11 +303,10 @@ export default function AdminFinalPage() {
             Final
           </h2>
           <p className="mt-1 max-w-2xl text-[var(--muted)]">
-            Liste 1 : les N premiers par score (ex aequo au seuil inclus).
-            Liste 2 : uniquement les suivants strictement sous le seuil, jamais
-            un CNE déjà en liste 1. Hors délai au-dessus du seuil → TO CONTACT
-            (Excel seulement). Le PDF de publication n&apos;inclut aucun hors
-            délai.
+            Liste 1 : top N + ex aequo + seuil publié. Liste 2 : suivants
+            strictement sous le seuil, sans aucun CNE de la liste 1, sans
+            trou dans le classement. Hors délai &gt; seuil → TO CONTACT
+            (Excel). Hors délai ≤ seuil restent dans les listes Excel et PDF.
           </p>
         </div>
         <div className="flex flex-col items-end gap-2">

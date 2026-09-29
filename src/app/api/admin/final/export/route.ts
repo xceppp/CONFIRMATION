@@ -4,7 +4,6 @@ import { FILIERES } from "@/lib/filieres";
 import { listConfirmations } from "@/lib/sheets";
 import {
   cellValue,
-  isHorsDelai,
   selectFinalRound,
 } from "@/lib/confirmations-export";
 import { buildFinalSelectionPdf } from "@/lib/confirmations-pdf";
@@ -267,12 +266,13 @@ export async function POST(request: Request) {
       round === 2 ? "admis_liste2" : "admis_inscription";
 
     if (format === "pdf") {
+      // Selected rows only: liste 1/2 already exclude TO CONTACT (late > seuil).
+      // Late students at or under the seuil stay in the PDF so nobody is skipped.
       const buffer = await buildFinalSelectionPdf(
         selected.map((g) => ({
           code: g.code,
           name: g.name,
-          // Publish PDF: never include hors délai (Excel only).
-          rows: g.rows.filter((r) => !isHorsDelai(r)),
+          rows: g.rows,
         })),
         null,
         round === 2

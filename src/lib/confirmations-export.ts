@@ -304,12 +304,20 @@ export type FinalRoundSpec = {
 };
 
 /**
- * Published liste-1 floor. A confirmed student at or above this score
- * stays on liste 1 even when newer confirmations would push the top-N
- * cutoff higher. GI is the last name on the published list (16.7928).
+ * Published liste-1 floor (LIST TO PUBLISH). Anyone at or above this score
+ * stays on the liste-1 side. Liste 2 only takes scores strictly below.
  */
 export const PUBLISHED_LIST1_SEUIL: Record<string, number> = {
+  DWM: 14.3683,
+  FBA: 14.2643,
+  GC: 14.838,
+  GETE: 15.9525,
   GI: 16.7928,
+  GTE: 14.4983,
+  IATE: 16.05,
+  PMD: 12.662,
+  TCC: 13.325,
+  TM: 14.9628,
 };
 
 /** Late manual confirmation flag. */
@@ -479,16 +487,24 @@ export function selectFinalRound(
       first.map(rowCne).filter(Boolean),
     );
     const lastFirst = first[first.length - 1];
-    const seuilNum =
+    const published = PUBLISHED_LIST1_SEUIL[f.code];
+    let seuilNum =
       lastFirst != null ? parseScore(lastFirst) : built.seuilNum;
+    if (published != null && Number.isFinite(published)) {
+      seuilNum = Math.max(seuilNum, published);
+    }
     const seuil =
-      lastFirst != null ? cellValue(lastFirst, "Score") : built.seuil;
+      Number.isFinite(published) && published >= (lastFirst != null ? parseScore(lastFirst) : -Infinity)
+        ? String(published)
+        : lastFirst != null
+          ? cellValue(lastFirst, "Score")
+          : built.seuil;
 
     let picked: StudentRow[];
     if (round === 1) {
       picked = first;
     } else {
-      // Strictly after liste 1: never repeat a L1 CNE, never score ≥ seuil.
+      // Strictly after liste 1 / published seuil: no L1 CNE, no score ≥ seuil.
       picked = built.pool
         .filter((row) => {
           const cne = rowCne(row);
