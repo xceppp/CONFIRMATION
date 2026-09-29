@@ -303,10 +303,11 @@ export default function AdminFinalPage() {
             Final
           </h2>
           <p className="mt-1 max-w-2xl text-[var(--muted)]">
-            Liste 1 : les N premiers par score (hors délai ≤ seuil inclus en
-            Excel). GI garde le seuil publié 16.7928. Hors délai au-dessus du
-            seuil → feuille TO CONTACT (Excel seulement). Le PDF de
-            publication n&apos;inclut aucun hors délai.
+            Liste 1 : les N premiers par score (ex aequo au seuil inclus).
+            Liste 2 : uniquement les suivants strictement sous le seuil, jamais
+            un CNE déjà en liste 1. Hors délai au-dessus du seuil → TO CONTACT
+            (Excel seulement). Le PDF de publication n&apos;inclut aucun hors
+            délai.
           </p>
         </div>
         <div className="flex flex-col items-end gap-2">

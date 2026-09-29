@@ -333,18 +333,34 @@ export function liste1CutoffIndex(
   scoresDesc: number[],
 ): number {
   const n = Math.min(Math.max(0, Math.floor(list1)), scoresDesc.length);
-  const floor = PUBLISHED_LIST1_SEUIL[code];
-  if (floor == null || !Number.isFinite(floor)) return n;
-  let atOrAbove = 0;
-  for (const score of scoresDesc) {
-    if (!(score + 1e-6 >= floor)) break;
-    atOrAbove += 1;
+  if (n <= 0) return 0;
+
+  // Keep every student tied with the Nth score (no cutoff anomaly).
+  const nthScore = scoresDesc[n - 1];
+  let end = n;
+  if (Number.isFinite(nthScore) && nthScore !== -Infinity) {
+    while (
+      end < scoresDesc.length &&
+      scoresDesc[end] + 1e-6 >= nthScore
+    ) {
+      end += 1;
+    }
   }
-  return Math.max(n, atOrAbove);
+
+  const floor = PUBLISHED_LIST1_SEUIL[code];
+  if (floor != null && Number.isFinite(floor)) {
+    let atOrAbove = 0;
+    for (const score of scoresDesc) {
+      if (!(score + 1e-6 >= floor)) break;
+      atOrAbove += 1;
+    }
+    end = Math.max(end, atOrAbove);
+  }
+  return end;
 }
 
 /**
- * Seuil from on-time confirmations only (top N / published floor).
+ * Seuil from on-time confirmations only (top N / published floor / ties).
  * Hors délai above that seuil → to contact.
  * Hors délai at or under → join the normal pool like on-time students.
  */
@@ -398,10 +414,16 @@ export function buildFinalPoolForFiliere(
   return { pool, seuil, seuilNum, toContact };
 }
 
+function rowCne(row: StudentRow): string {
+  return String(row.CNE || row.Code || "")
+    .trim()
+    .toUpperCase();
+}
+
 /**
- * List 1 = top `list1` by score (on-time + hors délai ≤ seuil).
- * List 2 = the next `list2` after those.
- * Hors délai above the seuil are returned in `toContact` only (Excel), never PDF.
+ * List 1 = top `list1` by score (ties at the cutoff kept on list 1).
+ * List 2 = next students strictly below the seuil, never anyone from list 1.
+ * Hors délai above the seuil → `toContact` only (Excel), never PDF.
  */
 export function selectFinalRound(
   rows: StudentRow[],
@@ -453,8 +475,28 @@ export function selectFinalRound(
       built.pool.map((row) => parseScore(row)),
     );
     const first = built.pool.slice(0, end);
-    const picked =
-      round === 1 ? first : built.pool.slice(end, end + list2);
+    const firstCnes = new Set(
+      first.map(rowCne).filter(Boolean),
+    );
+    const lastFirst = first[first.length - 1];
+    const seuilNum =
+      lastFirst != null ? parseScore(lastFirst) : built.seuilNum;
+    const seuil =
+      lastFirst != null ? cellValue(lastFirst, "Score") : built.seuil;
+
+    let picked: StudentRow[];
+    if (round === 1) {
+      picked = first;
+    } else {
+      // Strictly after liste 1: never repeat a L1 CNE, never score ≥ seuil.
+      picked = built.pool
+        .filter((row) => {
+          const cne = rowCne(row);
+          if (cne && firstCnes.has(cne)) return false;
+          return parseScore(row) < seuilNum - 1e-6;
+        })
+        .slice(0, list2);
+    }
 
     selected.push({
       code: f.code,
@@ -470,7 +512,7 @@ export function selectFinalRound(
       selected: picked.length,
       shortfall: Math.max(0, want - picked.length),
       list1,
-      seuil: built.seuil,
+      seuil,
     });
     if (built.toContact.length > 0) {
       toContact.push({
