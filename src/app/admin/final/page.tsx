@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { isHorsDelai, liste1CutoffIndex } from "@/lib/confirmations-export";
+import { buildFinalPoolForFiliere, isHorsDelai } from "@/lib/confirmations-export";
 import { FILIERES, resolveFiliereFromLabel } from "@/lib/filieres";
 
 type ConfCounts = Record<string, number>;
@@ -58,11 +58,6 @@ function emptyExtra(): Record<string, string> {
   const init: Record<string, string> = {};
   for (const f of FILIERES) init[f.code] = "";
   return init;
-}
-
-function scoreOf(row: ConfRow): number {
-  const n = Number.parseFloat(String(row.Score || "").replace(",", "."));
-  return Number.isFinite(n) ? n : -Infinity;
 }
 
 export default function AdminFinalPage() {
@@ -172,18 +167,10 @@ export default function AdminFinalPage() {
   function seuilOf(code: string): string {
     const n = Number.parseInt(places[code] || "", 10);
     if (!Number.isFinite(n) || n <= 0) return "—";
-    const pool = confRows
-      .filter((row) => !isHorsDelai(row))
-      .filter((row) => resolveFiliereFromLabel(String(row.Filiere || row.FiliereCode || ""))?.code === code)
-      .sort((a, b) => scoreOf(b) - scoreOf(a));
-    const end = liste1CutoffIndex(
-      code,
-      n,
-      pool.map((row) => scoreOf(row)),
-    );
-    const last = pool[end - 1];
-    if (!last) return "—";
-    return String(last.Score || "—");
+    const f = FILIERES.find((x) => x.code === code);
+    if (!f) return "—";
+    const built = buildFinalPoolForFiliere(confRows, f.code, f.name, n);
+    return built.seuil || "—";
   }
 
   async function doExport(round: 1 | 2, format: "excel" | "pdf") {
@@ -264,7 +251,20 @@ export default function AdminFinalPage() {
     setError("");
     setInfo("");
     try {
-      const res = await fetch("/api/admin/final/hors-delai");
+      const bodyPlaces: Record<string, number> = {};
+      for (const f of FILIERES) {
+        const n = Number.parseInt(String(places[f.code] || "").trim(), 10);
+        if (Number.isFinite(n) && n > 0) bodyPlaces[f.code] = n;
+      }
+      if (Object.keys(bodyPlaces).length === 0) {
+        setError("Indiquez les places liste 1 pour calculer le seuil.");
+        return;
+      }
+      const res = await fetch("/api/admin/final/hors-delai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ places: bodyPlaces }),
+      });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         setError(data.error || "Export hors délai impossible");
@@ -283,7 +283,7 @@ export default function AdminFinalPage() {
       a.remove();
       URL.revokeObjectURL(url);
       setInfo(
-        "Excel hors délai téléchargé — une feuille par filière, trié par score, avec téléphone.",
+        "Excel hors délai : feuille Liste normale (≤ seuil) et TO CONTACT (> seuil). Absents du PDF.",
       );
     } catch {
       setError("Erreur réseau pendant l'export hors délai.");
@@ -303,12 +303,10 @@ export default function AdminFinalPage() {
             Final
           </h2>
           <p className="mt-1 max-w-2xl text-[var(--muted)]">
-            Liste 1 : les N premiers confirmés par score. Le dernier fixe le
-            seuil. GI garde le seuil publié 16.7928 : tout confirmé à ce
-            score ou au-dessus reste en liste 1. Les hors délai restent à
-            part. Liste 2 : vous indiquez combien d&apos;étudiants ajouter.
-            L&apos;export prend les suivants, juste après ce seuil, sans
-            reprendre la liste 1.
+            Liste 1 : les N premiers par score (hors délai ≤ seuil inclus en
+            Excel). GI garde le seuil publié 16.7928. Hors délai au-dessus du
+            seuil → feuille TO CONTACT (Excel seulement). Le PDF de
+            publication n&apos;inclut aucun hors délai.
           </p>
         </div>
         <div className="flex flex-col items-end gap-2">

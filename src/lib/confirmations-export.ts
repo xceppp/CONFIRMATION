@@ -312,15 +312,21 @@ export const PUBLISHED_LIST1_SEUIL: Record<string, number> = {
   GI: 16.7928,
 };
 
-/** How many leading rows of a score-desc pool belong on liste 1. */
-/** Late manual confirmation: kept out of liste 1 and liste 2. */
+/** Late manual confirmation flag. */
 export function isHorsDelai(row: { HorsDelai?: string }): boolean {
   const v = String(row.HorsDelai || "")
     .trim()
     .toLowerCase();
-  return v === "1" || v === "oui" || v === "true" || v === "hors delai" || v === "hors délai";
+  return (
+    v === "1" ||
+    v === "oui" ||
+    v === "true" ||
+    v === "hors delai" ||
+    v === "hors délai"
+  );
 }
 
+/** How many leading rows of a score-desc pool belong on liste 1. */
 export function liste1CutoffIndex(
   code: string,
   list1: number,
@@ -338,8 +344,64 @@ export function liste1CutoffIndex(
 }
 
 /**
- * List 1 = top `list1` by score, extended through the published seuil.
- * List 2 = the next `list2` after those, so nobody from list 1 is repeated.
+ * Seuil from on-time confirmations only (top N / published floor).
+ * Hors délai above that seuil → to contact.
+ * Hors délai at or under → join the normal pool like on-time students.
+ */
+export function buildFinalPoolForFiliere(
+  rows: StudentRow[],
+  code: string,
+  name: string,
+  list1: number,
+): {
+  pool: StudentRow[];
+  seuil: string;
+  seuilNum: number;
+  toContact: StudentRow[];
+} {
+  const onTime = rows
+    .filter((r) => rowMatchesFiliere(r, code, name))
+    .filter((r) => !isHorsDelai(r))
+    .sort((a, b) => parseScore(b) - parseScore(a));
+
+  const end = liste1CutoffIndex(
+    code,
+    list1,
+    onTime.map((row) => parseScore(row)),
+  );
+  const lastOnTime = onTime[Math.max(0, end - 1)];
+  const published = PUBLISHED_LIST1_SEUIL[code];
+  let seuilNum =
+    lastOnTime != null ? parseScore(lastOnTime) : Number.NEGATIVE_INFINITY;
+  if (Number.isFinite(published)) {
+    seuilNum = Math.max(seuilNum, published);
+  }
+  const seuil =
+    lastOnTime != null
+      ? cellValue(lastOnTime, "Score")
+      : Number.isFinite(published)
+        ? String(published)
+        : "";
+
+  const late = rows
+    .filter((r) => rowMatchesFiliere(r, code, name))
+    .filter((r) => isHorsDelai(r));
+  const toContact = late
+    .filter((r) => parseScore(r) > seuilNum + 1e-6)
+    .sort((a, b) => parseScore(b) - parseScore(a));
+  const lateOk = late.filter((r) => !(parseScore(r) > seuilNum + 1e-6));
+
+  const pool = [...onTime, ...lateOk].sort(
+    (a, b) => parseScore(b) - parseScore(a),
+  );
+
+  return { pool, seuil, seuilNum, toContact };
+}
+
+/**
+ * List 1 = top `list1` by score (on-time + hors délai ≤ seuil).
+ * List 2 = the next `list2` after those.
+ * Hors délai above the seuil are returned in `toContact` only (Excel), never PDF.
  */
 export function selectFinalRound(
   rows: StudentRow[],
@@ -357,6 +419,7 @@ export function selectFinalRound(
     list1: number;
     seuil: string;
   }[];
+  toContact: { code: string; name: string; rows: StudentRow[] }[];
 } {
   const selected: {
     code: string;
@@ -374,6 +437,7 @@ export function selectFinalRound(
     list1: number;
     seuil: string;
   }[] = [];
+  const toContact: { code: string; name: string; rows: StudentRow[] }[] = [];
 
   for (const f of specs) {
     const list1 = Math.max(0, Math.floor(f.list1));
@@ -382,22 +446,15 @@ export function selectFinalRound(
     if (want <= 0) continue;
     if (round === 2 && list1 <= 0) continue;
 
-    const pool = rows
-      .filter((r) => rowMatchesFiliere(r, f.code, f.name))
-      .filter((r) => !isHorsDelai(r))
-      .sort((a, b) => parseScore(b) - parseScore(a));
-
+    const built = buildFinalPoolForFiliere(rows, f.code, f.name, list1);
     const end = liste1CutoffIndex(
       f.code,
       list1,
-      pool.map((row) => parseScore(row)),
+      built.pool.map((row) => parseScore(row)),
     );
-    const first = pool.slice(0, end);
-    const lastOfFirst = first[first.length - 1];
-    const seuil =
-      lastOfFirst != null ? cellValue(lastOfFirst, "Score") : "";
+    const first = built.pool.slice(0, end);
     const picked =
-      round === 1 ? first : pool.slice(end, end + list2);
+      round === 1 ? first : built.pool.slice(end, end + list2);
 
     selected.push({
       code: f.code,
@@ -409,13 +466,20 @@ export function selectFinalRound(
       code: f.code,
       name: f.name,
       places: want,
-      confirmed: pool.length,
+      confirmed: built.pool.length,
       selected: picked.length,
       shortfall: Math.max(0, want - picked.length),
       list1,
-      seuil,
+      seuil: built.seuil,
     });
+    if (built.toContact.length > 0) {
+      toContact.push({
+        code: f.code,
+        name: f.name,
+        rows: built.toContact,
+      });
+    }
   }
 
-  return { selected, summary };
+  return { selected, summary, toContact };
 }

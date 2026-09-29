@@ -1,7 +1,11 @@
 import ExcelJS from "exceljs";
 import { requireAdmin } from "@/lib/auth";
-import { FILIERES, resolveFiliereFromLabel } from "@/lib/filieres";
-import { isHorsDelai } from "@/lib/confirmations-export";
+import { FILIERES } from "@/lib/filieres";
+import {
+  buildFinalPoolForFiliere,
+  cellValue,
+  isHorsDelai,
+} from "@/lib/confirmations-export";
 import { listConfirmations } from "@/lib/sheets";
 import type { StudentRow } from "@/lib/columns";
 import { NextResponse } from "next/server";
@@ -9,16 +13,28 @@ import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
-const HEADERS = ["CNE", "Nom complet", "Téléphone", "Score", "Filière"];
+const HEADERS = [
+  "CNE",
+  "Nom complet",
+  "Téléphone",
+  "Score",
+  "Filière",
+  "Seuil",
+];
 
 function scoreOf(row: StudentRow): number {
   const n = Number.parseFloat(String(row.Score || "").replace(",", "."));
   return Number.isFinite(n) ? n : -Infinity;
 }
 
-function styleHeader(sheet: ExcelJS.Worksheet) {
+function styleHeader(sheet: ExcelJS.Worksheet, colCount: number) {
   const head = sheet.getRow(1);
-  head.font = { bold: true, color: { argb: "FFFFFFFF" }, name: "Calibri", size: 11 };
+  head.font = {
+    bold: true,
+    color: { argb: "FFFFFFFF" },
+    name: "Calibri",
+    size: 11,
+  };
   head.fill = {
     type: "pattern",
     pattern: "solid",
@@ -28,7 +44,7 @@ function styleHeader(sheet: ExcelJS.Worksheet) {
   sheet.views = [{ state: "frozen", ySplit: 1 }];
   sheet.autoFilter = {
     from: { row: 1, column: 1 },
-    to: { row: Math.max(sheet.rowCount, 1), column: HEADERS.length },
+    to: { row: Math.max(sheet.rowCount, 1), column: colCount },
   };
   sheet.columns = [
     { width: 16 },
@@ -36,72 +52,103 @@ function styleHeader(sheet: ExcelJS.Worksheet) {
     { width: 16 },
     { width: 12 },
     { width: 14 },
+    { width: 12 },
   ];
 }
 
-function addStudentRows(sheet: ExcelJS.Worksheet, rows: StudentRow[]) {
+function addRows(
+  sheet: ExcelJS.Worksheet,
+  rows: { row: StudentRow; seuil: string; code: string }[],
+) {
   sheet.addRow(HEADERS);
-  for (const row of rows) {
-    const filiere =
-      resolveFiliereFromLabel(String(row.Filiere || row.FiliereCode || ""))
-        ?.code || String(row.Filiere || "");
+  for (const { row, seuil, code } of rows) {
     sheet.addRow([
-      row.CNE || row.Code || "",
-      row.NomComplet || "",
-      row.Telephone || "",
-      row.Score || "",
-      filiere,
+      cellValue(row, "CNE"),
+      cellValue(row, "NomComplet"),
+      cellValue(row, "Telephone"),
+      cellValue(row, "Score"),
+      code,
+      seuil,
     ]);
   }
-  styleHeader(sheet);
+  styleHeader(sheet, HEADERS.length);
 }
 
-/** Hors délai only — one sheet per filière, score descending, with phone. */
-export async function GET() {
+function readPlaces(body: unknown): Record<string, number> {
+  if (!body || typeof body !== "object") return {};
+  const raw = (body as { places?: unknown }).places;
+  if (!raw || typeof raw !== "object") return {};
+  const out: Record<string, number> = {};
+  for (const f of FILIERES) {
+    const v = (raw as Record<string, unknown>)[f.code];
+    const n = Number.parseInt(String(v ?? "").trim(), 10);
+    if (Number.isFinite(n) && n > 0) out[f.code] = n;
+  }
+  return out;
+}
+
+/**
+ * Hors délai Excel only:
+ * - "Liste normale" = hors délai with score ≤ seuil (join normal ranking)
+ * - "TO CONTACT" = hors délai with score > seuil
+ * Never used for the publish PDF.
+ */
+export async function POST(request: Request) {
   if (!(await requireAdmin())) {
     return NextResponse.json({ error: "Accès admin refusé" }, { status: 403 });
   }
 
   try {
-    const rows = (await listConfirmations(undefined, { force: true })).filter((row) => isHorsDelai(row));
-    if (rows.length === 0) {
+    const body = await request.json().catch(() => null);
+    const places = readPlaces(body);
+    if (Object.keys(places).length === 0) {
+      return NextResponse.json(
+        { error: "Indiquez les places liste 1 pour calculer le seuil." },
+        { status: 400 },
+      );
+    }
+
+    const all = await listConfirmations(undefined, { force: true });
+    const late = all.filter((row) => isHorsDelai(row));
+    if (late.length === 0) {
       return NextResponse.json(
         { error: "Aucun étudiant hors délai." },
         { status: 400 },
       );
     }
 
-    const byCode = new Map<string, StudentRow[]>();
-    for (const row of rows) {
-      const code =
-        resolveFiliereFromLabel(String(row.Filiere || row.FiliereCode || ""))
-          ?.code || "AUTRE";
-      const list = byCode.get(code);
-      if (list) list.push(row);
-      else byCode.set(code, [row]);
+    const normal: { row: StudentRow; seuil: string; code: string }[] = [];
+    const contact: { row: StudentRow; seuil: string; code: string }[] = [];
+
+    for (const f of FILIERES) {
+      const list1 = places[f.code];
+      if (!list1) continue;
+      const built = buildFinalPoolForFiliere(all, f.code, f.name, list1);
+      for (const row of built.pool.filter((r) => isHorsDelai(r))) {
+        normal.push({ row, seuil: built.seuil, code: f.code });
+      }
+      for (const row of built.toContact) {
+        contact.push({ row, seuil: built.seuil, code: f.code });
+      }
     }
-    for (const list of byCode.values()) {
-      list.sort((a, b) => scoreOf(b) - scoreOf(a));
-    }
+
+    normal.sort((a, b) => {
+      const c = a.code.localeCompare(b.code);
+      return c !== 0 ? c : scoreOf(b.row) - scoreOf(a.row);
+    });
+    contact.sort((a, b) => {
+      const c = a.code.localeCompare(b.code);
+      return c !== 0 ? c : scoreOf(b.row) - scoreOf(a.row);
+    });
 
     const workbook = new ExcelJS.Workbook();
     workbook.creator = "Confirmation";
 
-    const ordered = [
-      ...FILIERES.filter((f) => byCode.has(f.code)),
-      ...(byCode.has("AUTRE")
-        ? [{ code: "AUTRE", name: "Autres" }]
-        : []),
-    ];
+    const normale = workbook.addWorksheet("Liste normale");
+    addRows(normale, normal);
 
-    const tous = workbook.addWorksheet("Tous");
-    const allRows = ordered.flatMap((f) => byCode.get(f.code) || []);
-    addStudentRows(tous, allRows);
-
-    for (const f of ordered) {
-      const sheet = workbook.addWorksheet(f.code.slice(0, 31));
-      addStudentRows(sheet, byCode.get(f.code) || []);
-    }
+    const toContact = workbook.addWorksheet("TO CONTACT");
+    addRows(toContact, contact);
 
     const stamp = new Date().toISOString().slice(0, 10);
     const buffer = Buffer.from(await workbook.xlsx.writeBuffer());

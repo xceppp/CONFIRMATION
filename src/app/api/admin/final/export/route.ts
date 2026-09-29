@@ -4,6 +4,7 @@ import { FILIERES } from "@/lib/filieres";
 import { listConfirmations } from "@/lib/sheets";
 import {
   cellValue,
+  isHorsDelai,
   selectFinalRound,
 } from "@/lib/confirmations-export";
 import { buildFinalSelectionPdf } from "@/lib/confirmations-pdf";
@@ -69,6 +70,7 @@ async function buildExcel(
     seuil: string;
   }[],
   round: 1 | 2,
+  toContact: { code: string; name: string; rows: import("@/lib/columns").StudentRow[] }[],
 ): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Confirmation";
@@ -176,6 +178,44 @@ async function buildExcel(
     });
   }
 
+  const contactRows = toContact.flatMap((g) => g.rows);
+  if (contactRows.length > 0) {
+    const contact = workbook.addWorksheet("TO CONTACT", {
+      views: [{ state: "frozen", ySplit: 1 }],
+    });
+    contact.addRow([
+      "CNE / Code Massar",
+      "Nom complet",
+      "Filière",
+      "Score",
+      "Seuil liste 1",
+      "Téléphone",
+      "Agent",
+      "Date confirmation",
+    ]);
+    contact.getRow(1).font = { bold: true };
+    for (const group of toContact) {
+      const seuil =
+        summary.find((s) => s.code === group.code)?.seuil || "";
+      for (const row of group.rows) {
+        contact.addRow([
+          cellValue(row, "CNE"),
+          cellValue(row, "NomComplet"),
+          cellValue(row, "Filiere") || group.name,
+          cellValue(row, "Score"),
+          seuil,
+          cellValue(row, "Telephone"),
+          cellValue(row, "Agent"),
+          cellValue(row, "DateConfirmation"),
+        ]);
+      }
+    }
+    contact.columns.forEach((col) => {
+      col.width = 18;
+    });
+    contact.getColumn(2).width = 32;
+  }
+
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
@@ -220,7 +260,7 @@ export async function POST(request: Request) {
     }
 
     const rows = await listConfirmations();
-    const { selected, summary } = selectFinalRound(rows, active, round);
+    const { selected, summary, toContact } = selectFinalRound(rows, active, round);
 
     const stamp = new Date().toISOString().slice(0, 10);
     const fileBase =
@@ -231,7 +271,8 @@ export async function POST(request: Request) {
         selected.map((g) => ({
           code: g.code,
           name: g.name,
-          rows: g.rows,
+          // Publish PDF: never include hors délai (Excel only).
+          rows: g.rows.filter((r) => !isHorsDelai(r)),
         })),
         null,
         round === 2
@@ -252,7 +293,7 @@ export async function POST(request: Request) {
       });
     }
 
-    const buffer = await buildExcel(selected, summary, round);
+    const buffer = await buildExcel(selected, summary, round, toContact);
     return new NextResponse(new Uint8Array(buffer), {
       status: 200,
       headers: {
