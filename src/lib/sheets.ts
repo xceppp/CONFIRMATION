@@ -714,6 +714,32 @@ function stampHorsDelai(rows: StudentRow[], marks: Map<string, StudentRow>) {
   }
 }
 
+/** HorsDelai-only rows (not on Confirmations) still enter the final pool. */
+function mergeHorsDelaiOnly(
+  list: StudentRow[],
+  marks: Map<string, StudentRow>,
+): StudentRow[] {
+  if (marks.size === 0) return list;
+  const have = new Set(
+    list.map((row) => normCode(row.CNE || row.Code || "")).filter(Boolean),
+  );
+  const extra: StudentRow[] = [];
+  for (const [code, mark] of marks) {
+    if (!code || have.has(code)) continue;
+    extra.push(
+      normalizeConfirmationRow({
+        ...mark,
+        CNE: code,
+        Code: code,
+        HorsDelai: "1",
+      }),
+    );
+    have.add(code);
+  }
+  if (extra.length === 0) return list;
+  return list.concat(extra);
+}
+
 /**
  * Reload Confirmations from Google Sheets into RAM.
  * Critical on Vercel: each serverless instance has its own memory —
@@ -752,12 +778,15 @@ export async function refreshConfirmations(options?: {
         const conf = buildConfirmationsIndex(raw);
         const hors = await loadHorsDelaiByCode();
         stampHorsDelai(conf.confirmationList, hors);
+        const merged = mergeHorsDelaiOnly(conf.confirmationList, hors);
+        for (const row of merged) {
+          const code = normCode(row.CNE || row.Code || "");
+          if (code) conf.confirmationsByCode.set(code, row);
+        }
         const c = await getCache();
         c.confirmationsByCode = conf.confirmationsByCode;
-        c.confirmationCount = conf.confirmationCount;
-        c.confirmationList = sortConfirmationsByFiliereThenScore(
-          conf.confirmationList,
-        );
+        c.confirmationCount = merged.length;
+        c.confirmationList = sortConfirmationsByFiliereThenScore(merged);
         confirmationsFetchedAt = Date.now();
       } catch (e) {
         if (isQuotaError(e)) {

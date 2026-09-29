@@ -386,7 +386,10 @@ export function buildFinalPoolForFiliere(
   const onTime = rows
     .filter((r) => rowMatchesFiliere(r, code, name))
     .filter((r) => !isHorsDelai(r))
-    .sort((a, b) => parseScore(b) - parseScore(a));
+    .sort(
+      (a, b) =>
+        parseScore(b) - parseScore(a) || rowCne(a).localeCompare(rowCne(b)),
+    );
 
   const end = liste1CutoffIndex(
     code,
@@ -412,11 +415,15 @@ export function buildFinalPoolForFiliere(
     .filter((r) => isHorsDelai(r));
   const toContact = late
     .filter((r) => parseScore(r) > seuilNum + 1e-6)
-    .sort((a, b) => parseScore(b) - parseScore(a));
+    .sort(
+      (a, b) =>
+        parseScore(b) - parseScore(a) || rowCne(a).localeCompare(rowCne(b)),
+    );
   const lateOk = late.filter((r) => !(parseScore(r) > seuilNum + 1e-6));
 
   const pool = [...onTime, ...lateOk].sort(
-    (a, b) => parseScore(b) - parseScore(a),
+    (a, b) =>
+      parseScore(b) - parseScore(a) || rowCne(a).localeCompare(rowCne(b)),
   );
 
   return { pool, seuil, seuilNum, toContact };
@@ -431,6 +438,7 @@ function rowCne(row: StudentRow): string {
 /**
  * List 1 = top `list1` by score (ties at the cutoff kept on list 1).
  * List 2 = next students strictly below the seuil, never anyone from list 1.
+ * Ties at the liste-2 cutoff stay together (nobody cut mid-ex-aequo).
  * Hors délai above the seuil → `toContact` only (Excel), never PDF.
  */
 export function selectFinalRound(
@@ -505,13 +513,23 @@ export function selectFinalRound(
       picked = first;
     } else {
       // Strictly after liste 1 / published seuil: no L1 CNE, no score ≥ seuil.
-      picked = built.pool
-        .filter((row) => {
-          const cne = rowCne(row);
-          if (cne && firstCnes.has(cne)) return false;
-          return parseScore(row) < seuilNum - 1e-6;
-        })
-        .slice(0, list2);
+      const candidates = built.pool.filter((row) => {
+        const cne = rowCne(row);
+        if (cne && firstCnes.has(cne)) return false;
+        return parseScore(row) < seuilNum - 1e-6;
+      });
+      let take = Math.min(list2, candidates.length);
+      // Keep every ex aequo at the last taken score (no mid-tie reject).
+      if (take > 0) {
+        const cut = parseScore(candidates[take - 1]);
+        while (
+          take < candidates.length &&
+          parseScore(candidates[take]) + 1e-6 >= cut
+        ) {
+          take += 1;
+        }
+      }
+      picked = candidates.slice(0, take);
     }
 
     selected.push({
