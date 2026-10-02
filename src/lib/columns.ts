@@ -52,6 +52,15 @@ export const HORS_DELAI_HEADERS = [
   "Telephone",
 ] as const;
 
+/** Snapshot of the first hors-délai wave — new inserts are everything else. */
+export const HORS_DELAI_LOCK_HEADERS = [
+  "CNE",
+  "NomComplet",
+  "Filiere",
+  "Score",
+  "LockedAt",
+] as const;
+
 export type StudentRow = Record<string, string>;
 
 /** Feuille Agents — comptes créés par l'admin */

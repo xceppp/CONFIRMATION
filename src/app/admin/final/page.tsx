@@ -69,13 +69,35 @@ export default function AdminFinalPage() {
   const [horsCount, setHorsCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState<
-    "l1-excel" | "l1-pdf" | "l2-excel" | "l2-pdf" | "hors" | null
+    | "l1-excel"
+    | "l1-pdf"
+    | "l2-excel"
+    | "l2-pdf"
+    | "hors"
+    | "hors-new"
+    | "hors-lock"
+    | "hors-unlock"
+    | null
   >(null);
   const [list1Unlocked, setList1Unlocked] = useState(false);
   const [unlockOpen, setUnlockOpen] = useState(false);
   const [unlockPassword, setUnlockPassword] = useState("");
+  const [horsLockedCount, setHorsLockedCount] = useState(0);
+  const [horsLockedAt, setHorsLockedAt] = useState("");
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
+
+  async function loadHorsLockStatus() {
+    try {
+      const res = await fetch("/api/admin/final/hors-delai");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return;
+      setHorsLockedCount(Number(data.lockedCount || 0));
+      setHorsLockedAt(String(data.lockedAt || ""));
+    } catch {
+      /* ignore */
+    }
+  }
 
   async function loadCounts() {
     setLoading(true);
@@ -110,6 +132,7 @@ export default function AdminFinalPage() {
       setConfirmedByCode(counts);
       setConfRows(rows);
       setHorsCount(allRows.filter((row) => isHorsDelai(row)).length);
+      await loadHorsLockStatus();
     } catch {
       setError("Erreur réseau.");
     } finally {
@@ -246,8 +269,61 @@ export default function AdminFinalPage() {
     }
   }
 
-  async function exportHorsDelai() {
-    setExporting("hors");
+  async function lockHorsDelaiFirst() {
+    setExporting("hors-lock");
+    setError("");
+    setInfo("");
+    try {
+      const res = await fetch("/api/admin/final/hors-delai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "lock" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.error || "Verrouillage impossible");
+        return;
+      }
+      setHorsLockedCount(Number(data.lockedCount || 0));
+      setHorsLockedAt(String(data.lockedAt || ""));
+      setInfo(
+        data.message ||
+          `1ère sélection hors délai verrouillée (${data.lockedCount}).`,
+      );
+    } catch {
+      setError("Erreur réseau pendant le verrouillage hors délai.");
+    } finally {
+      setExporting(null);
+    }
+  }
+
+  async function clearHorsDelaiFirstLock() {
+    setExporting("hors-unlock");
+    setError("");
+    setInfo("");
+    try {
+      const res = await fetch("/api/admin/final/hors-delai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "clearLock" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.error || "Impossible d'effacer le verrouillage");
+        return;
+      }
+      setHorsLockedCount(0);
+      setHorsLockedAt("");
+      setInfo(data.message || "Verrouillage hors délai effacé.");
+    } catch {
+      setError("Erreur réseau.");
+    } finally {
+      setExporting(null);
+    }
+  }
+
+  async function exportHorsDelai(onlyNew = false) {
+    setExporting(onlyNew ? "hors-new" : "hors");
     setError("");
     setInfo("");
     try {
@@ -263,7 +339,7 @@ export default function AdminFinalPage() {
       const res = await fetch("/api/admin/final/hors-delai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ places: bodyPlaces }),
+        body: JSON.stringify({ places: bodyPlaces, onlyNew }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -277,13 +353,18 @@ export default function AdminFinalPage() {
       a.download =
         res.headers
           .get("Content-Disposition")
-          ?.match(/filename="(.+)"/)?.[1] || "hors_delai.xlsx";
+          ?.match(/filename="(.+)"/)?.[1] ||
+        (onlyNew ? "hors_delai_nouveaux.xlsx" : "hors_delai.xlsx");
       document.body.appendChild(a);
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
       setInfo(
-        "Excel hors délai : feuille Liste normale (≤ seuil) et TO CONTACT (> seuil). Absents du PDF.",
+        onlyNew
+          ? "Excel NOUVEAUX hors délai uniquement."
+          : horsLockedCount > 0
+            ? "Excel séparé : feuilles « 1ère sélection » + feuilles « Nouveaux » (+ Resume)."
+            : "Excel hors délai : Liste normale (≤ seuil) et TO CONTACT (> seuil). Verrouillez la 1ère sélection pour séparer les vagues.",
       );
     } catch {
       setError("Erreur réseau pendant l'export hors délai.");
@@ -306,7 +387,8 @@ export default function AdminFinalPage() {
             Liste 1 : top N + ex aequo + seuil publié. Liste 2 : suivants
             strictement sous le seuil, sans aucun CNE de la liste 1, sans
             trou dans le classement. Hors délai &gt; seuil → TO CONTACT
-            (Excel). Hors délai ≤ seuil restent dans les listes Excel et PDF.
+            (Excel). Verrouillez la 1ère vague hors délai, puis exportez
+            « Nouveaux » pour les inserts suivants uniquement.
           </p>
         </div>
         <div className="flex flex-col items-end gap-2">
@@ -355,14 +437,53 @@ export default function AdminFinalPage() {
             <button
               type="button"
               disabled={exporting !== null}
-              onClick={() => void exportHorsDelai()}
+              onClick={() => void exportHorsDelai(false)}
               className="rounded-xl border border-[var(--line)] bg-white px-4 py-2.5 text-sm font-semibold hover:bg-[var(--bg)] disabled:opacity-50"
             >
               {exporting === "hors"
                 ? "Hors délai…"
                 : `Hors délai${horsCount > 0 ? ` (${horsCount})` : ""}`}
             </button>
+            <button
+              type="button"
+              disabled={exporting !== null || horsCount === 0}
+              onClick={() => void lockHorsDelaiFirst()}
+              className="rounded-xl border border-amber-600 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+              title="Fige la vague actuelle : les prochains inserts = export Nouveaux"
+            >
+              {exporting === "hors-lock"
+                ? "Verrouillage…"
+                : horsLockedCount > 0
+                  ? `Re-verrouiller (${horsLockedCount})`
+                  : "Verrouiller 1ère sélection"}
+            </button>
+            <button
+              type="button"
+              disabled={exporting !== null || horsLockedCount === 0}
+              onClick={() => void exportHorsDelai(true)}
+              className="rounded-xl border border-emerald-700 bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-900 hover:bg-emerald-100 disabled:opacity-50"
+            >
+              {exporting === "hors-new" ? "Nouveaux…" : "Hors délai (nouveaux)"}
+            </button>
+            {horsLockedCount > 0 ? (
+              <button
+                type="button"
+                disabled={exporting !== null}
+                onClick={() => void clearHorsDelaiFirstLock()}
+                className="rounded-xl border border-[var(--line)] bg-white px-3 py-2.5 text-xs font-semibold text-[var(--muted)] hover:bg-[var(--bg)] disabled:opacity-50"
+              >
+                {exporting === "hors-unlock" ? "…" : "Effacer verrou"}
+              </button>
+            ) : null}
           </div>
+          {horsLockedCount > 0 ? (
+            <p className="max-w-xl text-right text-xs text-[var(--muted)]">
+              1ère sélection hors délai verrouillée : {horsLockedCount}{" "}
+              étudiant(s)
+              {horsLockedAt ? ` — ${horsLockedAt}` : ""}. L’export « Hors
+              délai » sépare 1ère sélection / Nouveaux.
+            </p>
+          ) : null}
         </div>
       </div>
 

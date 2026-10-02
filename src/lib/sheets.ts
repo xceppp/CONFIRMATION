@@ -4,6 +4,7 @@ import {
   CONFIRMATIONS_HEADERS,
   ETUDIANTS_HEADERS,
   HORS_DELAI_HEADERS,
+  HORS_DELAI_LOCK_HEADERS,
   type AgentRow,
   type StudentRow,
 } from "./columns";
@@ -13,6 +14,8 @@ import { sortConfirmationsByFiliereThenScore } from "./confirmations-export";
 const SHEET_CONFIRMATIONS = "Confirmations";
 /** Confirmations après la clôture. Même CNE, liste à part. */
 const SHEET_HORS_DELAI = "HorsDelai";
+/** Locked first hors-délai wave — export "nouveaux" excludes these CNEs. */
+const SHEET_HORS_DELAI_LOCK = "HorsDelaiLock";
 /** Append-only mirror — never cleared by journal wipe. Used to repair lost rows. */
 const SHEET_CONFIRMATIONS_AUDIT = "ConfirmationsAudit";
 const SHEET_AGENTS = "Agents";
@@ -1407,5 +1410,118 @@ export async function updateAgentPassword(
   password: string,
 ): Promise<void> {
   await updateAgent(name, name, password);
+}
+
+function normCne(code: string): string {
+  return String(code || "")
+    .trim()
+    .toUpperCase();
+}
+
+/** CNEs frozen in the first hors-délai selection. */
+export async function getHorsDelaiLockedCnes(): Promise<{
+  cnes: Set<string>;
+  lockedCount: number;
+  lockedAt: string;
+}> {
+  const { sheets, sheetId } = getSheets();
+  await ensureSheetExists(
+    sheets,
+    sheetId,
+    SHEET_HORS_DELAI_LOCK,
+    HORS_DELAI_LOCK_HEADERS,
+  );
+  const res = await withSheetsRetry("horsdelai.lock.get", () =>
+    sheets.spreadsheets.values.get({
+      spreadsheetId: sheetId,
+      range: `${SHEET_HORS_DELAI_LOCK}!A:E`,
+    }),
+  );
+  const values = res.data.values || [];
+  const cnes = new Set<string>();
+  let lockedAt = "";
+  for (let i = 1; i < values.length; i++) {
+    const cne = normCne(values[i]?.[0] || "");
+    if (!cne) continue;
+    cnes.add(cne);
+    if (!lockedAt && values[i]?.[4]) lockedAt = String(values[i][4]).trim();
+  }
+  return { cnes, lockedCount: cnes.size, lockedAt };
+}
+
+/**
+ * Replace the lock sheet with the current hors-délai wave (first selection).
+ * Later exports with onlyNew=true return everyone not in this set.
+ */
+export async function lockHorsDelaiSelection(
+  rows: StudentRow[],
+): Promise<{ lockedCount: number; lockedAt: string }> {
+  const { sheets, sheetId } = getSheets();
+  await ensureSheetExists(
+    sheets,
+    sheetId,
+    SHEET_HORS_DELAI_LOCK,
+    HORS_DELAI_LOCK_HEADERS,
+  );
+
+  const lockedAt = new Date().toLocaleString("fr-FR", {
+    timeZone: "Africa/Casablanca",
+  });
+  const seen = new Set<string>();
+  const lines: string[][] = [Array.from(HORS_DELAI_LOCK_HEADERS)];
+  for (const row of rows) {
+    const cne = normCne(row.CNE || row.Code || "");
+    if (!cne || seen.has(cne)) continue;
+    seen.add(cne);
+    lines.push([
+      cne,
+      String(row.NomComplet || "").trim(),
+      String(row.Filiere || row.FiliereCode || "").trim(),
+      String(row.Score || "").trim(),
+      lockedAt,
+    ]);
+  }
+
+  await withSheetsRetry("horsdelai.lock.clear", () =>
+    sheets.spreadsheets.values.clear({
+      spreadsheetId: sheetId,
+      range: `${SHEET_HORS_DELAI_LOCK}!A:E`,
+    }),
+  );
+  await withSheetsRetry("horsdelai.lock.write", () =>
+    sheets.spreadsheets.values.update({
+      spreadsheetId: sheetId,
+      range: `${SHEET_HORS_DELAI_LOCK}!A1`,
+      valueInputOption: "RAW",
+      requestBody: { values: lines },
+    }),
+  );
+
+  return { lockedCount: seen.size, lockedAt };
+}
+
+/** Clear the hors-délai first-selection lock. */
+export async function clearHorsDelaiLock(): Promise<void> {
+  const { sheets, sheetId } = getSheets();
+  await ensureSheetExists(
+    sheets,
+    sheetId,
+    SHEET_HORS_DELAI_LOCK,
+    HORS_DELAI_LOCK_HEADERS,
+  );
+  await withSheetsRetry("horsdelai.lock.clear", () =>
+    sheets.spreadsheets.values.clear({
+      spreadsheetId: sheetId,
+      range: `${SHEET_HORS_DELAI_LOCK}!A:E`,
+    }),
+  );
+  await withSheetsRetry("horsdelai.lock.header", () =>
+    sheets.spreadsheets.values.update({
+      spreadsheetId: sheetId,
+      range: `${SHEET_HORS_DELAI_LOCK}!A1`,
+      valueInputOption: "RAW",
+      requestBody: { values: [Array.from(HORS_DELAI_LOCK_HEADERS)] },
+    }),
+  );
 }
 
