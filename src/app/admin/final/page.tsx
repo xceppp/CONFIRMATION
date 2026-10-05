@@ -227,6 +227,17 @@ export default function AdminFinalPage() {
     return built.seuil || "—";
   }
 
+  function seuil2Of(code: string): string {
+    const n = Number.parseInt(places[code] || "", 10);
+    const m = Number.parseInt(extra[code] || "", 10);
+    if (!Number.isFinite(n) || n <= 0) return "—";
+    if (!Number.isFinite(m) || m <= 0) return "—";
+    const f = FILIERES.find((x) => x.code === code);
+    if (!f) return "—";
+    const built = buildFinalPoolForFiliere(confRows, f.code, f.name, n, m);
+    return built.seuilList2 || "—";
+  }
+
   async function doExport(round: 1 | 2 | 3, format: "excel" | "pdf") {
     const tag = `${round === 1 ? "l1" : round === 2 ? "l2" : "l3"}-${format}` as
       | "l1-excel"
@@ -373,9 +384,12 @@ export default function AdminFinalPage() {
     setInfo("");
     try {
       const bodyPlaces: Record<string, number> = {};
+      const bodyExtra: Record<string, number> = {};
       for (const f of FILIERES) {
         const n = Number.parseInt(String(places[f.code] || "").trim(), 10);
+        const m = Number.parseInt(String(extra[f.code] || "").trim(), 10);
         if (Number.isFinite(n) && n > 0) bodyPlaces[f.code] = n;
+        if (Number.isFinite(m) && m > 0) bodyExtra[f.code] = m;
       }
       if (Object.keys(bodyPlaces).length === 0) {
         setError("Indiquez les places liste 1 pour calculer le seuil.");
@@ -384,7 +398,11 @@ export default function AdminFinalPage() {
       const res = await fetch("/api/admin/final/hors-delai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ places: bodyPlaces, onlyNew }),
+        body: JSON.stringify({
+          places: bodyPlaces,
+          extra: bodyExtra,
+          onlyNew,
+        }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -404,12 +422,15 @@ export default function AdminFinalPage() {
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
+      const hasL2 = Object.keys(bodyExtra).length > 0;
       setInfo(
         onlyNew
           ? "Excel NOUVEAUX hors délai uniquement."
           : horsLockedCount > 0
             ? "Excel séparé : feuilles « 1ère sélection » + feuilles « Nouveaux » (+ Resume)."
-            : "Excel hors délai : Liste normale (≤ seuil) et TO CONTACT (> seuil). Verrouillez la 1ère sélection pour séparer les vagues.",
+            : hasL2
+              ? "Excel hors délai : TO CONTACT = score > seuil 2 (dernier de la liste 2)."
+              : "Excel hors délai : Liste normale (≤ seuil 1) et TO CONTACT (> seuil 1). Remplissez Liste 2 pour utiliser le seuil 2.",
       );
     } catch {
       setError("Erreur réseau pendant l'export hors délai.");
@@ -429,11 +450,11 @@ export default function AdminFinalPage() {
             Final
           </h2>
           <p className="mt-1 max-w-2xl text-[var(--muted)]">
-            Liste 1 : top N + ex aequo + seuil publié. Liste 2 / 3 : suivants
-            strictement sous le cutoff précédent, sans CNE déjà retenus, sans
-            trou dans le classement. Hors délai &gt; seuil → TO CONTACT
-            (Excel). Verrouillez la 1ère vague hors délai, puis exportez
-            « Nouveaux » pour les inserts suivants uniquement.
+            Liste 1 : top N + ex aequo + seuil 1. Liste 2 : suivants sous le
+            seuil 1 — le dernier de la liste 2 fixe le seuil 2. Liste 3 :
+            suivants sous le seuil 2. Hors délai &gt; seuil de contact → TO
+            CONTACT (Excel) : seuil 1 avant liste 2, seuil 2 dès que Liste 2
+            est renseignée.
           </p>
         </div>
         <div className="flex flex-col items-end gap-2">
@@ -683,15 +704,16 @@ export default function AdminFinalPage() {
         {loading ? (
           <p className="text-sm text-[var(--muted)]">Chargement…</p>
         ) : (
-          <table className="w-full min-w-[980px] text-left text-sm">
+          <table className="w-full min-w-[1100px] text-left text-sm">
             <thead>
               <tr className="border-b border-[var(--line)] text-[var(--muted)]">
                 <th className="py-2 pr-3 font-medium">Code</th>
                 <th className="py-2 pr-3 font-medium">Filière</th>
                 <th className="py-2 pr-3 font-medium">Confirmés</th>
                 <th className="py-2 pr-3 font-medium">Liste 1 (N)</th>
-                <th className="py-2 pr-3 font-medium">Seuil</th>
+                <th className="py-2 pr-3 font-medium">Seuil 1</th>
                 <th className="py-2 pr-3 font-medium">Liste 2 (+)</th>
+                <th className="py-2 pr-3 font-medium">Seuil 2</th>
                 <th className="py-2 font-medium">Liste 3 (+)</th>
               </tr>
             </thead>
@@ -756,6 +778,9 @@ export default function AdminFinalPage() {
                         }
                         className="w-24 rounded-xl border border-[var(--line)] bg-white px-3 py-2 outline-none ring-[var(--brand)] focus:ring-2 disabled:cursor-not-allowed disabled:bg-[var(--bg)] disabled:text-[var(--muted)]"
                       />
+                    </td>
+                    <td className="py-3 pr-3 font-medium text-[var(--ink)]">
+                      {seuil2Of(f.code)}
                     </td>
                     <td className="py-3">
                       <input

@@ -376,19 +376,28 @@ export function liste1CutoffIndex(
 
 /**
  * Seuil from on-time confirmations only (top N / published floor / ties).
- * Hors délai above that seuil → to contact.
+ * Hors délai above contact seuil → to contact.
  * Hors délai at or under → join the normal pool like on-time students.
+ *
+ * Contact seuil:
+ * - list2 places given → last student of Liste 2 (seuil 2, lower bar)
+ * - otherwise → Liste 1 seuil
  */
 export function buildFinalPoolForFiliere(
   rows: StudentRow[],
   code: string,
   name: string,
   list1: number,
+  list2 = 0,
 ): {
   pool: StudentRow[];
   seuil: string;
   seuilNum: number;
+  seuilList2: string;
+  seuil2Num: number;
   toContact: StudentRow[];
+  contactSeuil: string;
+  contactSeuilNum: number;
 } {
   const onTime = rows
     .filter((r) => rowMatchesFiliere(r, code, name))
@@ -420,20 +429,61 @@ export function buildFinalPoolForFiliere(
   const late = rows
     .filter((r) => rowMatchesFiliere(r, code, name))
     .filter((r) => isHorsDelai(r));
-  const toContact = late
-    .filter((r) => parseScore(r) > seuilNum + 1e-6)
-    .sort(
-      (a, b) =>
-        parseScore(b) - parseScore(a) || rowCne(a).localeCompare(rowCne(b)),
-    );
-  const lateOk = late.filter((r) => !(parseScore(r) > seuilNum + 1e-6));
+  // Pool always admits late ≤ seuil 1 (so Liste 2 ranking stays stable).
+  const lateOkForPool = late.filter(
+    (r) => !(parseScore(r) > seuilNum + 1e-6),
+  );
 
-  const pool = [...onTime, ...lateOk].sort(
+  const pool = [...onTime, ...lateOkForPool].sort(
     (a, b) =>
       parseScore(b) - parseScore(a) || rowCne(a).localeCompare(rowCne(b)),
   );
 
-  return { pool, seuil, seuilNum, toContact };
+  // Liste 2 cutoff = last of the next `list2` seats under seuil 1.
+  let seuilList2 = "";
+  let seuil2Num = Number.NEGATIVE_INFINITY;
+  const want2 = Math.max(0, Math.floor(list2));
+  if (want2 > 0 && Number.isFinite(seuilNum)) {
+    const afterL1 = pool.filter((row) => parseScore(row) < seuilNum - 1e-6);
+    let take = Math.min(want2, afterL1.length);
+    if (take > 0) {
+      const cut = parseScore(afterL1[take - 1]);
+      while (
+        take < afterL1.length &&
+        parseScore(afterL1[take]) + 1e-6 >= cut
+      ) {
+        take += 1;
+      }
+      const lastSecond = afterL1[take - 1];
+      if (lastSecond) {
+        seuil2Num = parseScore(lastSecond);
+        seuilList2 = cellValue(lastSecond, "Score");
+      }
+    }
+  }
+
+  // After Liste 2 exists, TO CONTACT bar = seuil 2 (last of list 2).
+  const useSeuil2 = want2 > 0 && Number.isFinite(seuil2Num) && seuil2Num > -Infinity;
+  const contactSeuilNum = useSeuil2 ? seuil2Num : seuilNum;
+  const contactSeuil = useSeuil2 ? seuilList2 : seuil;
+
+  const toContact = late
+    .filter((r) => parseScore(r) > contactSeuilNum + 1e-6)
+    .sort(
+      (a, b) =>
+        parseScore(b) - parseScore(a) || rowCne(a).localeCompare(rowCne(b)),
+    );
+
+  return {
+    pool,
+    seuil,
+    seuilNum,
+    seuilList2,
+    seuil2Num,
+    toContact,
+    contactSeuil,
+    contactSeuilNum,
+  };
 }
 
 function rowCne(row: StudentRow): string {
@@ -446,10 +496,11 @@ function rowCne(row: StudentRow): string {
  * List 1 = top `list1` by score (ties at the cutoff kept on list 1).
  * List 2 = next students strictly below the liste-1 seuil, never anyone from list 1.
  * List 3 = next students strictly below the liste-2 cutoff, never L1/L2 CNEs.
- *   If places remain empty, fill from Liste-2 TO CONTACT (hors délai > seuil).
- * TO CONTACT on Excel for L3 = hors délai > seuil who were NOT already on L2 TO CONTACT.
+ *   If places remain empty, fill from Liste-2 TO CONTACT (hors délai > seuil 1).
+ * TO CONTACT: L2 Excel uses seuil 1; L3 Excel uses seuil 2 (last of list 2),
+ *   excluding anyone already locked as L2 à contacter.
  * Ties at each cutoff stay together (nobody cut mid-ex-aequo).
- * Hors délai above the seuil → `toContact` only (Excel), never PDF unless used to fill L3.
+ * Hors délai above the contact seuil → `toContact` only (Excel), never PDF unless L3 fill.
  */
 export function selectFinalRound(
   rows: StudentRow[],
@@ -516,9 +567,21 @@ export function selectFinalRound(
     if (round === 2 && list1 <= 0) continue;
     if (round === 3 && (list1 <= 0 || list2 <= 0)) continue;
 
-    const built = buildFinalPoolForFiliere(rows, f.code, f.name, list1);
+    // L1/L2 contact bar = seuil 1. After list 2 exists (round 3) → seuil 2.
+    const built = buildFinalPoolForFiliere(
+      rows,
+      f.code,
+      f.name,
+      list1,
+      round >= 3 ? list2 : 0,
+    );
+    // Classic > seuil 1 contacts (for L2 lock / L3 seat fill).
+    const l1Contact = buildFinalPoolForFiliere(rows, f.code, f.name, list1);
     const toContactCnes = new Set(
       built.toContact.map(rowCne).filter(Boolean),
+    );
+    const l1ContactCnes = new Set(
+      l1Contact.toContact.map(rowCne).filter(Boolean),
     );
     const end = liste1CutoffIndex(
       f.code,
@@ -560,13 +623,13 @@ export function selectFinalRound(
     if (round === 1) {
       picked = first;
     } else if (round === 2) {
-      // Never admit TO CONTACT (hors délai > seuil) on liste 2.
+      // Never admit TO CONTACT (hors délai > seuil 1) on liste 2.
       picked = second.filter((row) => {
         const cne = rowCne(row);
-        return !(cne && toContactCnes.has(cne));
+        return !(cne && l1ContactCnes.has(cne));
       });
     } else {
-      // 1) Normal L3: respecting seuil / after L2 cutoff — PDF + list.
+      // 1) Normal L3: respecting seuil 2 / after L2 cutoff — PDF + list.
       const afterL2 = afterL1.filter((row) => {
         const cne = rowCne(row);
         if (cne && secondCnes.has(cne)) return false;
@@ -576,15 +639,14 @@ export function selectFinalRound(
       });
       picked = takeWithTies(afterL2, list3);
 
-      // 2) Exception: empty L3 places → fill from Liste-2 TO CONTACT only.
+      // 2) Exception: empty L3 places → fill from Liste-2 TO CONTACT (seuil 1) only.
       const need = Math.max(0, list3 - picked.length);
-      if (need > 0 && built.toContact.length > 0) {
+      if (need > 0 && l1Contact.toContact.length > 0) {
         const pickedCnes = new Set(picked.map(rowCne).filter(Boolean));
-        const fillers = built.toContact
+        const fillers = l1Contact.toContact
           .filter((row) => {
             const cne = rowCne(row);
             if (!cne || pickedCnes.has(cne)) return false;
-            // Prefer students who were on Liste 2 TO CONTACT; if lock empty, allow all.
             if (list2ToContactCnes && list2ToContactCnes.size > 0) {
               return list2ToContactCnes.has(cne);
             }

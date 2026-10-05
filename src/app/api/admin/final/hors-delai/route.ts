@@ -24,7 +24,7 @@ const HEADERS = [
   "Téléphone",
   "Score",
   "Filière",
-  "Seuil",
+  "Seuil contact",
 ];
 
 function scoreOf(row: StudentRow): number {
@@ -85,9 +85,9 @@ function addRows(
   styleHeader(sheet, HEADERS.length);
 }
 
-function readPlaces(body: unknown): Record<string, number> {
+function readPlaces(body: unknown, key = "places"): Record<string, number> {
   if (!body || typeof body !== "object") return {};
-  const raw = (body as { places?: unknown }).places;
+  const raw = (body as Record<string, unknown>)[key];
   if (!raw || typeof raw !== "object") return {};
   const out: Record<string, number> = {};
   for (const f of FILIERES) {
@@ -164,7 +164,8 @@ export async function POST(request: Request) {
       });
     }
 
-    const places = readPlaces(body);
+    const places = readPlaces(body, "places");
+    const extra = readPlaces(body, "extra");
     if (Object.keys(places).length === 0) {
       return NextResponse.json(
         { error: "Indiquez les places liste 1 pour calculer le seuil." },
@@ -201,16 +202,31 @@ export async function POST(request: Request) {
     for (const f of FILIERES) {
       const list1 = places[f.code];
       if (!list1) continue;
-      const built = buildFinalPoolForFiliere(all, f.code, f.name, list1);
+      const list2 = extra[f.code] || 0;
+      // With Liste 2 places → contact bar = seuil 2 (last of list 2).
+      const built = buildFinalPoolForFiliere(
+        all,
+        f.code,
+        f.name,
+        list1,
+        list2,
+      );
+      const contactSeuil = built.contactSeuil || built.seuil;
+      const contactCnes = new Set(
+        built.toContact.map(rowCne).filter(Boolean),
+      );
       for (const row of built.pool.filter((r) => isHorsDelai(r))) {
-        const inLock = hasLock && lock.cnes.has(rowCne(row));
-        const bucket = { row, seuil: built.seuil, code: f.code };
+        const cne = rowCne(row);
+        // Above contact seuil → TO CONTACT only (not Liste normale).
+        if (cne && contactCnes.has(cne)) continue;
+        const inLock = hasLock && lock.cnes.has(cne);
+        const bucket = { row, seuil: contactSeuil, code: f.code };
         if (inLock) lockedNormal.push(bucket);
         else newNormal.push(bucket);
       }
       for (const row of built.toContact) {
         const inLock = hasLock && lock.cnes.has(rowCne(row));
-        const bucket = { row, seuil: built.seuil, code: f.code };
+        const bucket = { row, seuil: contactSeuil, code: f.code };
         if (inLock) lockedContact.push(bucket);
         else newContact.push(bucket);
       }

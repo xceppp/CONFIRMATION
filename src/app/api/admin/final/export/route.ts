@@ -247,7 +247,7 @@ async function buildExcel(
       "Nom complet",
       "Filière",
       "Score",
-      "Seuil liste 1",
+      round >= 3 ? "Seuil liste 2" : "Seuil liste 1",
       "Téléphone",
       "Agent",
       "Date confirmation",
@@ -269,8 +269,10 @@ async function buildExcel(
     } else {
       for (const group of toContact) {
         const seuil =
-          summary.find((s) => s.code === group.code)?.seuil ||
           group.seuil ||
+          (round >= 3
+            ? summary.find((s) => s.code === group.code)?.seuilList2
+            : summary.find((s) => s.code === group.code)?.seuil) ||
           "";
         for (const row of group.rows) {
           contact.addRow([
@@ -384,9 +386,16 @@ export async function POST(request: Request) {
       >();
       for (const f of specs) {
         if (f.list1 <= 0) continue;
-        const built = buildFinalPoolForFiliere(rows, f.code, f.name, f.list1);
+        // Liste 2 Excel: TO CONTACT vs seuil 1.
+        // Liste 3 Excel: TO CONTACT vs seuil 2 (last of list 2).
+        const built = buildFinalPoolForFiliere(
+          rows,
+          f.code,
+          f.name,
+          f.list1,
+          round >= 3 ? f.list2 : 0,
+        );
         if (built.toContact.length === 0) continue;
-        // Liste 3: TO CONTACT sheet = only people NEVER on Liste 2 à contacter.
         const rowsContact =
           round === 3 && list2ContactLock.lockedCount > 0
             ? built.toContact.filter((row) => {
@@ -401,7 +410,7 @@ export async function POST(request: Request) {
           code: f.code,
           name: f.name,
           rows: rowsContact,
-          seuil: built.seuil,
+          seuil: built.contactSeuil || built.seuil,
         });
       }
       contactForExcel = [...byCode.values()];
