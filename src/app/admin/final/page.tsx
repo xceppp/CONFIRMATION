@@ -297,12 +297,12 @@ export default function AdminFinalPage() {
       setInfo(
         round === 3
           ? format === "pdf"
-            ? "PDF liste 3 téléchargé — étudiants juste après le cutoff de la liste 2."
-            : "Excel liste 3 : admis (vos nombres) + feuille « TO CONTACT hors delai »."
+            ? "PDF liste 3 : admis (seuil) + places restantes remplies depuis TO CONTACT liste 2."
+            : "Excel liste 3 : admis (+ fill TO CONTACT L2 si places vides) + feuille TO CONTACT = nouveaux seulement."
           : round === 2
             ? format === "pdf"
               ? "PDF liste 2 téléchargé — étudiants juste après le seuil de la liste 1."
-              : "Excel liste 2 : admis + feuille « TO CONTACT hors delai »."
+              : "Excel liste 2 : admis + TO CONTACT hors delai (mémorisé pour la liste 3)."
             : format === "pdf"
               ? "PDF liste 1 téléchargé — top scores selon les places."
               : "Excel liste 1 téléchargé — top scores selon les places.",

@@ -1,7 +1,11 @@
 import ExcelJS from "exceljs";
 import { requireAdmin } from "@/lib/auth";
 import { FILIERES } from "@/lib/filieres";
-import { listConfirmations } from "@/lib/sheets";
+import {
+  getListe2ToContactLockedCnes,
+  listConfirmations,
+  lockListe2ToContact,
+} from "@/lib/sheets";
 import {
   buildFinalPoolForFiliere,
   cellValue,
@@ -252,7 +256,9 @@ async function buildExcel(
     if (contactRows.length === 0) {
       contact.addRow([
         "—",
-        "Aucun hors délai au-dessus du seuil",
+        round >= 3
+          ? "Aucun nouveau hors délai à contacter (hors ceux déjà TO CONTACT liste 2)"
+          : "Aucun hors délai au-dessus du seuil",
         "",
         "",
         "",
@@ -348,18 +354,29 @@ export async function POST(request: Request) {
     }
 
     const rows = await listConfirmations(undefined, { force: true });
+
+    const list2ContactLock =
+      round === 3
+        ? await getListe2ToContactLockedCnes()
+        : { cnes: new Set<string>(), lockedCount: 0, lockedAt: "" };
+
     const { selected, summary, toContact } = selectFinalRound(
       rows,
       active,
       round,
+      round === 3
+        ? { list2ToContactCnes: list2ContactLock.cnes }
+        : undefined,
     );
 
     // Liste 2/3 Excel: collect ALL hors-délai TO CONTACT for every filière
     // with a liste-1 count (not only filières that have list2/list3 places).
-    let contactForExcel = toContact.map((g) => ({
-      ...g,
-      seuil: summary.find((s) => s.code === g.code)?.seuil || "",
-    }));
+    let contactForExcel: {
+      code: string;
+      name: string;
+      rows: StudentRow[];
+      seuil: string;
+    }[] = [];
     if (round >= 2) {
       const byCode = new Map<
         string,
@@ -369,14 +386,35 @@ export async function POST(request: Request) {
         if (f.list1 <= 0) continue;
         const built = buildFinalPoolForFiliere(rows, f.code, f.name, f.list1);
         if (built.toContact.length === 0) continue;
+        // Liste 3: TO CONTACT sheet = only people NEVER on Liste 2 à contacter.
+        const rowsContact =
+          round === 3 && list2ContactLock.lockedCount > 0
+            ? built.toContact.filter((row) => {
+                const cne = String(row.CNE || row.Code || "")
+                  .trim()
+                  .toUpperCase();
+                return cne && !list2ContactLock.cnes.has(cne);
+              })
+            : built.toContact;
+        if (rowsContact.length === 0) continue;
         byCode.set(f.code, {
           code: f.code,
           name: f.name,
-          rows: built.toContact,
+          rows: rowsContact,
           seuil: built.seuil,
         });
       }
       contactForExcel = [...byCode.values()];
+    } else {
+      contactForExcel = toContact.map((g) => ({
+        ...g,
+        seuil: summary.find((s) => s.code === g.code)?.seuil || "",
+      }));
+    }
+
+    // Freeze Liste 2 TO CONTACT on Excel export so Liste 3 can fill / exclude them.
+    if (round === 2 && format === "excel" && contactForExcel.length > 0) {
+      await lockListe2ToContact(contactForExcel.flatMap((g) => g.rows));
     }
 
     const stamp = new Date().toISOString().slice(0, 10);

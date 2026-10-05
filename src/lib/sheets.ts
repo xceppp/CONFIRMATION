@@ -16,6 +16,8 @@ const SHEET_CONFIRMATIONS = "Confirmations";
 const SHEET_HORS_DELAI = "HorsDelai";
 /** Locked first hors-délai wave — export "nouveaux" excludes these CNEs. */
 const SHEET_HORS_DELAI_LOCK = "HorsDelaiLock";
+/** TO CONTACT CNEs exported with Liste 2 — used to fill L3 shortfall / exclude from L3 TO CONTACT. */
+const SHEET_LISTE2_TO_CONTACT_LOCK = "Liste2ToContactLock";
 /** Append-only mirror — never cleared by journal wipe. Used to repair lost rows. */
 const SHEET_CONFIRMATIONS_AUDIT = "ConfirmationsAudit";
 const SHEET_AGENTS = "Agents";
@@ -1523,5 +1525,87 @@ export async function clearHorsDelaiLock(): Promise<void> {
       requestBody: { values: [Array.from(HORS_DELAI_LOCK_HEADERS)] },
     }),
   );
+}
+
+/** CNEs that appeared on Liste 2 Excel « TO CONTACT hors delai ». */
+export async function getListe2ToContactLockedCnes(): Promise<{
+  cnes: Set<string>;
+  lockedCount: number;
+  lockedAt: string;
+}> {
+  const { sheets, sheetId } = getSheets();
+  await ensureSheetExists(
+    sheets,
+    sheetId,
+    SHEET_LISTE2_TO_CONTACT_LOCK,
+    HORS_DELAI_LOCK_HEADERS,
+  );
+  const res = await withSheetsRetry("liste2.tocontact.lock.get", () =>
+    sheets.spreadsheets.values.get({
+      spreadsheetId: sheetId,
+      range: `${SHEET_LISTE2_TO_CONTACT_LOCK}!A:E`,
+    }),
+  );
+  const values = res.data.values || [];
+  const cnes = new Set<string>();
+  let lockedAt = "";
+  for (let i = 1; i < values.length; i++) {
+    const cne = normCne(values[i]?.[0] || "");
+    if (!cne) continue;
+    cnes.add(cne);
+    if (!lockedAt && values[i]?.[4]) lockedAt = String(values[i][4]).trim();
+  }
+  return { cnes, lockedCount: cnes.size, lockedAt };
+}
+
+/**
+ * Freeze Liste 2 TO CONTACT wave (called on Liste 2 Excel export).
+ * Liste 3 uses these to fill empty places; L3 TO CONTACT sheet excludes them.
+ */
+export async function lockListe2ToContact(
+  rows: StudentRow[],
+): Promise<{ lockedCount: number; lockedAt: string }> {
+  const { sheets, sheetId } = getSheets();
+  await ensureSheetExists(
+    sheets,
+    sheetId,
+    SHEET_LISTE2_TO_CONTACT_LOCK,
+    HORS_DELAI_LOCK_HEADERS,
+  );
+
+  const lockedAt = new Date().toLocaleString("fr-FR", {
+    timeZone: "Africa/Casablanca",
+  });
+  const seen = new Set<string>();
+  const lines: string[][] = [Array.from(HORS_DELAI_LOCK_HEADERS)];
+  for (const row of rows) {
+    const cne = normCne(row.CNE || row.Code || "");
+    if (!cne || seen.has(cne)) continue;
+    seen.add(cne);
+    lines.push([
+      cne,
+      String(row.NomComplet || "").trim(),
+      String(row.Filiere || row.FiliereCode || "").trim(),
+      String(row.Score || "").trim(),
+      lockedAt,
+    ]);
+  }
+
+  await withSheetsRetry("liste2.tocontact.lock.clear", () =>
+    sheets.spreadsheets.values.clear({
+      spreadsheetId: sheetId,
+      range: `${SHEET_LISTE2_TO_CONTACT_LOCK}!A:E`,
+    }),
+  );
+  await withSheetsRetry("liste2.tocontact.lock.write", () =>
+    sheets.spreadsheets.values.update({
+      spreadsheetId: sheetId,
+      range: `${SHEET_LISTE2_TO_CONTACT_LOCK}!A1`,
+      valueInputOption: "RAW",
+      requestBody: { values: lines },
+    }),
+  );
+
+  return { lockedCount: seen.size, lockedAt };
 }
 

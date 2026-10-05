@@ -446,14 +446,16 @@ function rowCne(row: StudentRow): string {
  * List 1 = top `list1` by score (ties at the cutoff kept on list 1).
  * List 2 = next students strictly below the liste-1 seuil, never anyone from list 1.
  * List 3 = next students strictly below the liste-2 cutoff, never L1/L2 CNEs.
- * TO CONTACT (hors délai > seuil) never appear on liste 2 or liste 3 admis.
+ *   If places remain empty, fill from Liste-2 TO CONTACT (hors délai > seuil).
+ * TO CONTACT on Excel for L3 = hors délai > seuil who were NOT already on L2 TO CONTACT.
  * Ties at each cutoff stay together (nobody cut mid-ex-aequo).
- * Hors délai above the seuil → `toContact` only (Excel), never PDF / never L2-L3.
+ * Hors délai above the seuil → `toContact` only (Excel), never PDF unless used to fill L3.
  */
 export function selectFinalRound(
   rows: StudentRow[],
   specs: FinalRoundSpec[],
   round: 1 | 2 | 3,
+  options?: { list2ToContactCnes?: Set<string> },
 ): {
   selected: { code: string; name: string; places: number; rows: StudentRow[] }[];
   summary: {
@@ -489,6 +491,7 @@ export function selectFinalRound(
     seuilList2: string;
   }[] = [];
   const toContact: { code: string; name: string; rows: StudentRow[] }[] = [];
+  const list2ToContactCnes = options?.list2ToContactCnes;
 
   function takeWithTies(candidates: StudentRow[], n: number): StudentRow[] {
     let take = Math.min(Math.max(0, n), candidates.length);
@@ -563,7 +566,7 @@ export function selectFinalRound(
         return !(cne && toContactCnes.has(cne));
       });
     } else {
-      // Strictly after liste 2: no L1/L2 CNE, no TO CONTACT, score < liste-2 cutoff.
+      // 1) Normal L3: respecting seuil / after L2 cutoff — PDF + list.
       const afterL2 = afterL1.filter((row) => {
         const cne = rowCne(row);
         if (cne && secondCnes.has(cne)) return false;
@@ -571,10 +574,29 @@ export function selectFinalRound(
         if (lastSecond == null) return true;
         return parseScore(row) < seuil2Num - 1e-6;
       });
-      picked = takeWithTies(afterL2, list3).filter((row) => {
-        const cne = rowCne(row);
-        return !(cne && toContactCnes.has(cne));
-      });
+      picked = takeWithTies(afterL2, list3);
+
+      // 2) Exception: empty L3 places → fill from Liste-2 TO CONTACT only.
+      const need = Math.max(0, list3 - picked.length);
+      if (need > 0 && built.toContact.length > 0) {
+        const pickedCnes = new Set(picked.map(rowCne).filter(Boolean));
+        const fillers = built.toContact
+          .filter((row) => {
+            const cne = rowCne(row);
+            if (!cne || pickedCnes.has(cne)) return false;
+            // Prefer students who were on Liste 2 TO CONTACT; if lock empty, allow all.
+            if (list2ToContactCnes && list2ToContactCnes.size > 0) {
+              return list2ToContactCnes.has(cne);
+            }
+            return true;
+          })
+          .sort(
+            (a, b) =>
+              parseScore(b) - parseScore(a) ||
+              rowCne(a).localeCompare(rowCne(b)),
+          );
+        picked = [...picked, ...takeWithTies(fillers, need)];
+      }
     }
 
     selected.push({
