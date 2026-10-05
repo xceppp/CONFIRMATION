@@ -3,10 +3,12 @@ import { requireAdmin } from "@/lib/auth";
 import { FILIERES } from "@/lib/filieres";
 import { listConfirmations } from "@/lib/sheets";
 import {
+  buildFinalPoolForFiliere,
   cellValue,
   selectFinalRound,
 } from "@/lib/confirmations-export";
 import { buildFinalSelectionPdf } from "@/lib/confirmations-pdf";
+import type { StudentRow } from "@/lib/columns";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -83,7 +85,12 @@ async function buildExcel(
     seuilList2: string;
   }[],
   round: 1 | 2 | 3,
-  toContact: { code: string; name: string; rows: import("@/lib/columns").StudentRow[] }[],
+  toContact: {
+    code: string;
+    name: string;
+    rows: StudentRow[];
+    seuil?: string;
+  }[],
 ): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Confirmation";
@@ -155,6 +162,14 @@ async function buildExcel(
           : [s.code, s.name, s.places, s.confirmed, s.selected, s.shortfall],
     );
   }
+  if (round >= 2) {
+    const nContact = toContact.reduce((acc, g) => acc + g.rows.length, 0);
+    resume.addRow([]);
+    resume.addRow([
+      "TO CONTACT hors délai",
+      `${nContact} étudiant(s) — feuille « TO CONTACT hors delai »`,
+    ]);
+  }
   resume.columns.forEach((col) => {
     col.width = 18;
   });
@@ -218,8 +233,9 @@ async function buildExcel(
   }
 
   const contactRows = toContact.flatMap((g) => g.rows);
-  if (contactRows.length > 0) {
-    const contact = workbook.addWorksheet("TO CONTACT", {
+  // Liste 2 / 3 Excel: always include TO CONTACT hors délai sheet.
+  if (round >= 2 || contactRows.length > 0) {
+    const contact = workbook.addWorksheet("TO CONTACT hors delai", {
       views: [{ state: "frozen", ySplit: 1 }],
     });
     contact.addRow([
@@ -233,20 +249,35 @@ async function buildExcel(
       "Date confirmation",
     ]);
     contact.getRow(1).font = { bold: true };
-    for (const group of toContact) {
-      const seuil =
-        summary.find((s) => s.code === group.code)?.seuil || "";
-      for (const row of group.rows) {
-        contact.addRow([
-          cellValue(row, "CNE"),
-          cellValue(row, "NomComplet"),
-          cellValue(row, "Filiere") || group.name,
-          cellValue(row, "Score"),
-          seuil,
-          cellValue(row, "Telephone"),
-          cellValue(row, "Agent"),
-          cellValue(row, "DateConfirmation"),
-        ]);
+    if (contactRows.length === 0) {
+      contact.addRow([
+        "—",
+        "Aucun hors délai au-dessus du seuil",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+      ]);
+    } else {
+      for (const group of toContact) {
+        const seuil =
+          summary.find((s) => s.code === group.code)?.seuil ||
+          group.seuil ||
+          "";
+        for (const row of group.rows) {
+          contact.addRow([
+            cellValue(row, "CNE"),
+            cellValue(row, "NomComplet"),
+            cellValue(row, "Filiere") || group.name,
+            cellValue(row, "Score"),
+            seuil,
+            cellValue(row, "Telephone"),
+            cellValue(row, "Agent"),
+            cellValue(row, "DateConfirmation"),
+          ]);
+        }
       }
     }
     contact.columns.forEach((col) => {
@@ -316,12 +347,37 @@ export async function POST(request: Request) {
       }
     }
 
-    const rows = await listConfirmations();
+    const rows = await listConfirmations(undefined, { force: true });
     const { selected, summary, toContact } = selectFinalRound(
       rows,
       active,
       round,
     );
+
+    // Liste 2/3 Excel: collect ALL hors-délai TO CONTACT for every filière
+    // with a liste-1 count (not only filières that have list2/list3 places).
+    let contactForExcel = toContact.map((g) => ({
+      ...g,
+      seuil: summary.find((s) => s.code === g.code)?.seuil || "",
+    }));
+    if (round >= 2) {
+      const byCode = new Map<
+        string,
+        { code: string; name: string; rows: StudentRow[]; seuil: string }
+      >();
+      for (const f of specs) {
+        if (f.list1 <= 0) continue;
+        const built = buildFinalPoolForFiliere(rows, f.code, f.name, f.list1);
+        if (built.toContact.length === 0) continue;
+        byCode.set(f.code, {
+          code: f.code,
+          name: f.name,
+          rows: built.toContact,
+          seuil: built.seuil,
+        });
+      }
+      contactForExcel = [...byCode.values()];
+    }
 
     const stamp = new Date().toISOString().slice(0, 10);
     const fileBase =
@@ -364,7 +420,12 @@ export async function POST(request: Request) {
       });
     }
 
-    const buffer = await buildExcel(selected, summary, round, toContact);
+    const buffer = await buildExcel(
+      selected,
+      summary,
+      round,
+      contactForExcel,
+    );
     return new NextResponse(new Uint8Array(buffer), {
       status: 200,
       headers: {

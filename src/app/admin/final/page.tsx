@@ -298,11 +298,11 @@ export default function AdminFinalPage() {
         round === 3
           ? format === "pdf"
             ? "PDF liste 3 téléchargé — étudiants juste après le cutoff de la liste 2."
-            : "Excel liste 3 téléchargé — suite du classement, sans L1 ni L2."
+            : "Excel liste 3 : admis (vos nombres) + feuille « TO CONTACT hors delai »."
           : round === 2
             ? format === "pdf"
               ? "PDF liste 2 téléchargé — étudiants juste après le seuil de la liste 1."
-              : "Excel liste 2 téléchargé — suite du classement, sans les étudiants de la liste 1."
+              : "Excel liste 2 : admis + feuille « TO CONTACT hors delai »."
             : format === "pdf"
               ? "PDF liste 1 téléchargé — top scores selon les places."
               : "Excel liste 1 téléchargé — top scores selon les places.",
