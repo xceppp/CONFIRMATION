@@ -446,8 +446,9 @@ function rowCne(row: StudentRow): string {
  * List 1 = top `list1` by score (ties at the cutoff kept on list 1).
  * List 2 = next students strictly below the liste-1 seuil, never anyone from list 1.
  * List 3 = next students strictly below the liste-2 cutoff, never L1/L2 CNEs.
+ * TO CONTACT (hors délai > seuil) never appear on liste 2 or liste 3 admis.
  * Ties at each cutoff stay together (nobody cut mid-ex-aequo).
- * Hors délai above the seuil → `toContact` only (Excel), never PDF.
+ * Hors délai above the seuil → `toContact` only (Excel), never PDF / never L2-L3.
  */
 export function selectFinalRound(
   rows: StudentRow[],
@@ -513,6 +514,9 @@ export function selectFinalRound(
     if (round === 3 && (list1 <= 0 || list2 <= 0)) continue;
 
     const built = buildFinalPoolForFiliere(rows, f.code, f.name, list1);
+    const toContactCnes = new Set(
+      built.toContact.map(rowCne).filter(Boolean),
+    );
     const end = liste1CutoffIndex(
       f.code,
       list1,
@@ -538,6 +542,7 @@ export function selectFinalRound(
     const afterL1 = built.pool.filter((row) => {
       const cne = rowCne(row);
       if (cne && firstCnes.has(cne)) return false;
+      if (cne && toContactCnes.has(cne)) return false;
       return parseScore(row) < seuilNum - 1e-6;
     });
     const second = takeWithTies(afterL1, list2);
@@ -552,16 +557,24 @@ export function selectFinalRound(
     if (round === 1) {
       picked = first;
     } else if (round === 2) {
-      picked = second;
+      // Never admit TO CONTACT (hors délai > seuil) on liste 2.
+      picked = second.filter((row) => {
+        const cne = rowCne(row);
+        return !(cne && toContactCnes.has(cne));
+      });
     } else {
-      // Strictly after liste 2: no L1/L2 CNE, score < liste-2 cutoff.
+      // Strictly after liste 2: no L1/L2 CNE, no TO CONTACT, score < liste-2 cutoff.
       const afterL2 = afterL1.filter((row) => {
         const cne = rowCne(row);
         if (cne && secondCnes.has(cne)) return false;
+        if (cne && toContactCnes.has(cne)) return false;
         if (lastSecond == null) return true;
         return parseScore(row) < seuil2Num - 1e-6;
       });
-      picked = takeWithTies(afterL2, list3);
+      picked = takeWithTies(afterL2, list3).filter((row) => {
+        const cne = rowCne(row);
+        return !(cne && toContactCnes.has(cne));
+      });
     }
 
     selected.push({
