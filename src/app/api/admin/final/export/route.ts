@@ -34,21 +34,33 @@ function parseRoundSpecs(body: unknown): {
   name: string;
   list1: number;
   list2: number;
+  list3: number;
 }[] {
   const placesRaw = readCountMap(body, "places");
   const extraRaw = readCountMap(body, "extra");
+  const thirdRaw = readCountMap(body, "third");
   return FILIERES.map((f) => {
     const raw1 = placesRaw[f.code] ?? placesRaw[f.code.toLowerCase()] ?? "";
     const raw2 = extraRaw[f.code] ?? extraRaw[f.code.toLowerCase()] ?? "";
+    const raw3 = thirdRaw[f.code] ?? thirdRaw[f.code.toLowerCase()] ?? "";
     const list1 = Number.parseInt(String(raw1).trim(), 10);
     const list2 = Number.parseInt(String(raw2).trim(), 10);
+    const list3 = Number.parseInt(String(raw3).trim(), 10);
     return {
       code: f.code,
       name: f.name,
       list1: Number.isFinite(list1) && list1 > 0 ? list1 : 0,
       list2: Number.isFinite(list2) && list2 > 0 ? list2 : 0,
+      list3: Number.isFinite(list3) && list3 > 0 ? list3 : 0,
     };
   });
+}
+
+function parseRound(body: unknown): 1 | 2 | 3 {
+  const n = Number((body as { round?: unknown } | null)?.round);
+  if (n === 3) return 3;
+  if (n === 2) return 2;
+  return 1;
 }
 
 async function buildExcel(
@@ -66,9 +78,11 @@ async function buildExcel(
     selected: number;
     shortfall: number;
     list1: number;
+    list2: number;
     seuil: string;
+    seuilList2: string;
   }[],
-  round: 1 | 2,
+  round: 1 | 2 | 3,
   toContact: { code: string; name: string; rows: import("@/lib/columns").StudentRow[] }[],
 ): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
@@ -78,41 +92,67 @@ async function buildExcel(
     views: [{ state: "frozen", ySplit: 1 }],
   });
   resume.addRow(
-    round === 2
+    round === 3
       ? [
           "Code",
           "Filière",
           "Liste 1",
           "Seuil liste 1",
-          "Liste 2 demandée",
+          "Liste 2",
+          "Seuil liste 2",
+          "Liste 3 demandée",
           "Confirmés",
           "Sélectionnés",
           "Manque",
         ]
-      : [
-          "Code",
-          "Filière",
-          "Places demandées",
-          "Confirmés",
-          "Admis",
-          "Manque",
-        ],
+      : round === 2
+        ? [
+            "Code",
+            "Filière",
+            "Liste 1",
+            "Seuil liste 1",
+            "Liste 2 demandée",
+            "Confirmés",
+            "Sélectionnés",
+            "Manque",
+          ]
+        : [
+            "Code",
+            "Filière",
+            "Places demandées",
+            "Confirmés",
+            "Admis",
+            "Manque",
+          ],
   );
   resume.getRow(1).font = { bold: true };
   for (const s of summary) {
     resume.addRow(
-      round === 2
+      round === 3
         ? [
             s.code,
             s.name,
             s.list1,
             s.seuil,
+            s.list2,
+            s.seuilList2,
             s.places,
             s.confirmed,
             s.selected,
             s.shortfall,
           ]
-        : [s.code, s.name, s.places, s.confirmed, s.selected, s.shortfall],
+        : round === 2
+          ? [
+              s.code,
+              s.name,
+              s.list1,
+              s.seuil,
+              s.places,
+              s.confirmed,
+              s.selected,
+              s.shortfall,
+            ]
+          : [s.code, s.name, s.places, s.confirmed, s.selected, s.shortfall],
     );
   }
   resume.columns.forEach((col) => {
@@ -228,46 +268,70 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => null);
     const format =
       String(body?.format || "excel").toLowerCase() === "pdf" ? "pdf" : "excel";
-    const round = Number(body?.round) === 2 ? 2 : 1;
+    const round = parseRound(body);
     const specs = parseRoundSpecs(body);
     const active = specs.filter((s) =>
-      round === 1 ? s.list1 > 0 : s.list2 > 0,
+      round === 1 ? s.list1 > 0 : round === 2 ? s.list2 > 0 : s.list3 > 0,
     );
 
     if (active.length === 0) {
       return NextResponse.json(
         {
           error:
-            round === 2
-              ? "Indiquez au moins un nombre pour la liste 2 (> 0)."
-              : "Indiquez au moins un nombre de places (> 0) pour une filière.",
+            round === 3
+              ? "Indiquez au moins un nombre pour la liste 3 (> 0)."
+              : round === 2
+                ? "Indiquez au moins un nombre pour la liste 2 (> 0)."
+                : "Indiquez au moins un nombre de places (> 0) pour une filière.",
         },
         { status: 400 },
       );
     }
 
-    const missingList1 = active.filter((s) => round === 2 && s.list1 <= 0);
-    if (missingList1.length > 0) {
-      return NextResponse.json(
-        {
-          error: `Liste 2 : indiquez d'abord le nombre de la liste 1 pour ${missingList1
-            .map((s) => s.code)
-            .join(", ")}.`,
-        },
-        { status: 400 },
-      );
+    if (round === 2) {
+      const missingList1 = active.filter((s) => s.list1 <= 0);
+      if (missingList1.length > 0) {
+        return NextResponse.json(
+          {
+            error: `Liste 2 : indiquez d'abord le nombre de la liste 1 pour ${missingList1
+              .map((s) => s.code)
+              .join(", ")}.`,
+          },
+          { status: 400 },
+        );
+      }
+    }
+
+    if (round === 3) {
+      const missing = active.filter((s) => s.list1 <= 0 || s.list2 <= 0);
+      if (missing.length > 0) {
+        return NextResponse.json(
+          {
+            error: `Liste 3 : indiquez d'abord liste 1 et liste 2 pour ${missing
+              .map((s) => s.code)
+              .join(", ")}.`,
+          },
+          { status: 400 },
+        );
+      }
     }
 
     const rows = await listConfirmations();
-    const { selected, summary, toContact } = selectFinalRound(rows, active, round);
+    const { selected, summary, toContact } = selectFinalRound(
+      rows,
+      active,
+      round,
+    );
 
     const stamp = new Date().toISOString().slice(0, 10);
     const fileBase =
-      round === 2 ? "admis_liste2" : "admis_inscription";
+      round === 3
+        ? "admis_liste3"
+        : round === 2
+          ? "admis_liste2"
+          : "admis_inscription";
 
     if (format === "pdf") {
-      // Selected rows only: liste 1/2 already exclude TO CONTACT (late > seuil).
-      // Late students at or under the seuil stay in the PDF so nobody is skipped.
       const buffer = await buildFinalSelectionPdf(
         selected.map((g) => ({
           code: g.code,
@@ -275,14 +339,21 @@ export async function POST(request: Request) {
           rows: g.rows,
         })),
         null,
-        round === 2
+        round === 3
           ? {
-              docTitle: "Deuxième liste des admis — EST Meknès",
+              docTitle: "Troisième liste des admis — EST Meknès",
               listSubtitle:
-                "Deuxième liste — étudiants admis à procéder à l'inscription",
-              totalLabel: (n) => `Liste 2 : ${n} étudiant(s)`,
+                "Troisième liste — étudiants admis à procéder à l'inscription",
+              totalLabel: (n) => `Liste 3 : ${n} étudiant(s)`,
             }
-          : undefined,
+          : round === 2
+            ? {
+                docTitle: "Deuxième liste des admis — EST Meknès",
+                listSubtitle:
+                  "Deuxième liste — étudiants admis à procéder à l'inscription",
+                totalLabel: (n) => `Liste 2 : ${n} étudiant(s)`,
+              }
+            : undefined,
       );
       return new NextResponse(new Uint8Array(buffer), {
         status: 200,

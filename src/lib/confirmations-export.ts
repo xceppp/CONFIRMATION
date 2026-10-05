@@ -301,6 +301,8 @@ export type FinalRoundSpec = {
   list1: number;
   /** How many additional students to take for list 2. */
   list2: number;
+  /** How many additional students to take for list 3 (after list 2). */
+  list3: number;
 };
 
 /**
@@ -442,14 +444,15 @@ function rowCne(row: StudentRow): string {
 
 /**
  * List 1 = top `list1` by score (ties at the cutoff kept on list 1).
- * List 2 = next students strictly below the seuil, never anyone from list 1.
- * Ties at the liste-2 cutoff stay together (nobody cut mid-ex-aequo).
+ * List 2 = next students strictly below the liste-1 seuil, never anyone from list 1.
+ * List 3 = next students strictly below the liste-2 cutoff, never L1/L2 CNEs.
+ * Ties at each cutoff stay together (nobody cut mid-ex-aequo).
  * Hors délai above the seuil → `toContact` only (Excel), never PDF.
  */
 export function selectFinalRound(
   rows: StudentRow[],
   specs: FinalRoundSpec[],
-  round: 1 | 2,
+  round: 1 | 2 | 3,
 ): {
   selected: { code: string; name: string; places: number; rows: StudentRow[] }[];
   summary: {
@@ -460,7 +463,9 @@ export function selectFinalRound(
     selected: number;
     shortfall: number;
     list1: number;
+    list2: number;
     seuil: string;
+    seuilList2: string;
   }[];
   toContact: { code: string; name: string; rows: StudentRow[] }[];
 } {
@@ -478,16 +483,34 @@ export function selectFinalRound(
     selected: number;
     shortfall: number;
     list1: number;
+    list2: number;
     seuil: string;
+    seuilList2: string;
   }[] = [];
   const toContact: { code: string; name: string; rows: StudentRow[] }[] = [];
 
+  function takeWithTies(candidates: StudentRow[], n: number): StudentRow[] {
+    let take = Math.min(Math.max(0, n), candidates.length);
+    if (take > 0) {
+      const cut = parseScore(candidates[take - 1]);
+      while (
+        take < candidates.length &&
+        parseScore(candidates[take]) + 1e-6 >= cut
+      ) {
+        take += 1;
+      }
+    }
+    return candidates.slice(0, take);
+  }
+
   for (const f of specs) {
     const list1 = Math.max(0, Math.floor(f.list1));
-    const list2 = Math.max(0, Math.floor(f.list2));
-    const want = round === 1 ? list1 : list2;
+    const list2 = Math.max(0, Math.floor(f.list2 ?? 0));
+    const list3 = Math.max(0, Math.floor(f.list3 ?? 0));
+    const want = round === 1 ? list1 : round === 2 ? list2 : list3;
     if (want <= 0) continue;
     if (round === 2 && list1 <= 0) continue;
+    if (round === 3 && (list1 <= 0 || list2 <= 0)) continue;
 
     const built = buildFinalPoolForFiliere(rows, f.code, f.name, list1);
     const end = liste1CutoffIndex(
@@ -496,9 +519,7 @@ export function selectFinalRound(
       built.pool.map((row) => parseScore(row)),
     );
     const first = built.pool.slice(0, end);
-    const firstCnes = new Set(
-      first.map(rowCne).filter(Boolean),
-    );
+    const firstCnes = new Set(first.map(rowCne).filter(Boolean));
     const lastFirst = first[first.length - 1];
     const published = PUBLISHED_LIST1_SEUIL[f.code];
     let seuilNum =
@@ -507,34 +528,40 @@ export function selectFinalRound(
       seuilNum = Math.max(seuilNum, published);
     }
     const seuil =
-      Number.isFinite(published) && published >= (lastFirst != null ? parseScore(lastFirst) : -Infinity)
+      Number.isFinite(published) &&
+      published >= (lastFirst != null ? parseScore(lastFirst) : -Infinity)
         ? String(published)
         : lastFirst != null
           ? cellValue(lastFirst, "Score")
           : built.seuil;
 
+    const afterL1 = built.pool.filter((row) => {
+      const cne = rowCne(row);
+      if (cne && firstCnes.has(cne)) return false;
+      return parseScore(row) < seuilNum - 1e-6;
+    });
+    const second = takeWithTies(afterL1, list2);
+    const secondCnes = new Set(second.map(rowCne).filter(Boolean));
+    const lastSecond = second[second.length - 1];
+    const seuil2Num =
+      lastSecond != null ? parseScore(lastSecond) : Number.NEGATIVE_INFINITY;
+    const seuilList2 =
+      lastSecond != null ? cellValue(lastSecond, "Score") : "";
+
     let picked: StudentRow[];
     if (round === 1) {
       picked = first;
+    } else if (round === 2) {
+      picked = second;
     } else {
-      // Strictly after liste 1 / published seuil: no L1 CNE, no score ≥ seuil.
-      const candidates = built.pool.filter((row) => {
+      // Strictly after liste 2: no L1/L2 CNE, score < liste-2 cutoff.
+      const afterL2 = afterL1.filter((row) => {
         const cne = rowCne(row);
-        if (cne && firstCnes.has(cne)) return false;
-        return parseScore(row) < seuilNum - 1e-6;
+        if (cne && secondCnes.has(cne)) return false;
+        if (lastSecond == null) return true;
+        return parseScore(row) < seuil2Num - 1e-6;
       });
-      let take = Math.min(list2, candidates.length);
-      // Keep every ex aequo at the last taken score (no mid-tie reject).
-      if (take > 0) {
-        const cut = parseScore(candidates[take - 1]);
-        while (
-          take < candidates.length &&
-          parseScore(candidates[take]) + 1e-6 >= cut
-        ) {
-          take += 1;
-        }
-      }
-      picked = candidates.slice(0, take);
+      picked = takeWithTies(afterL2, list3);
     }
 
     selected.push({
@@ -551,7 +578,9 @@ export function selectFinalRound(
       selected: picked.length,
       shortfall: Math.max(0, want - picked.length),
       list1,
+      list2,
       seuil,
+      seuilList2,
     });
     if (built.toContact.length > 0) {
       toContact.push({

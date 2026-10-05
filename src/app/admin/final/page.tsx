@@ -8,6 +8,7 @@ type ConfCounts = Record<string, number>;
 
 const PLACES_STORAGE_KEY = "admin-final-places";
 const EXTRA_STORAGE_KEY = "admin-final-places-2";
+const THIRD_STORAGE_KEY = "admin-final-places-3";
 const LIST1_EDIT_PASSWORD = "1955";
 
 type ConfRow = Record<string, string>;
@@ -63,6 +64,7 @@ function emptyExtra(): Record<string, string> {
 export default function AdminFinalPage() {
   const [places, setPlaces] = useState<Record<string, string>>(emptyPlaces);
   const [extra, setExtra] = useState<Record<string, string>>(emptyExtra);
+  const [third, setThird] = useState<Record<string, string>>(emptyExtra);
   const [placesHydrated, setPlacesHydrated] = useState(false);
   const [confirmedByCode, setConfirmedByCode] = useState<ConfCounts>({});
   const [confRows, setConfRows] = useState<ConfRow[]>([]);
@@ -73,6 +75,8 @@ export default function AdminFinalPage() {
     | "l1-pdf"
     | "l2-excel"
     | "l2-pdf"
+    | "l3-excel"
+    | "l3-pdf"
     | "hors"
     | "hors-new"
     | "hors-lock"
@@ -81,7 +85,8 @@ export default function AdminFinalPage() {
   >(null);
   const [list1Unlocked, setList1Unlocked] = useState(false);
   const [list2Unlocked, setList2Unlocked] = useState(false);
-  const [unlockOpen, setUnlockOpen] = useState<"l1" | "l2" | null>(null);
+  const [list3Unlocked, setList3Unlocked] = useState(false);
+  const [unlockOpen, setUnlockOpen] = useState<"l1" | "l2" | "l3" | null>(null);
   const [unlockPassword, setUnlockPassword] = useState("");
   const [horsLockedCount, setHorsLockedCount] = useState(0);
   const [horsLockedAt, setHorsLockedAt] = useState("");
@@ -144,6 +149,7 @@ export default function AdminFinalPage() {
   useEffect(() => {
     setPlaces(loadSavedMap(PLACES_STORAGE_KEY, emptyPlaces()));
     setExtra(loadSavedMap(EXTRA_STORAGE_KEY, emptyExtra()));
+    setThird(loadSavedMap(THIRD_STORAGE_KEY, emptyExtra()));
     setPlacesHydrated(true);
     void loadCounts();
   }, []);
@@ -153,10 +159,11 @@ export default function AdminFinalPage() {
     try {
       localStorage.setItem(PLACES_STORAGE_KEY, JSON.stringify(places));
       localStorage.setItem(EXTRA_STORAGE_KEY, JSON.stringify(extra));
+      localStorage.setItem(THIRD_STORAGE_KEY, JSON.stringify(third));
     } catch {
       /* quota / private mode */
     }
-  }, [places, extra, placesHydrated]);
+  }, [places, extra, third, placesHydrated]);
 
   const filledCount = useMemo(
     () =>
@@ -176,24 +183,38 @@ export default function AdminFinalPage() {
     [extra],
   );
 
-  function tryUnlockList(which: "l1" | "l2") {
+  const thirdCount = useMemo(
+    () =>
+      FILIERES.filter((f) => {
+        const n = Number.parseInt(third[f.code] || "", 10);
+        return Number.isFinite(n) && n > 0;
+      }).length,
+    [third],
+  );
+
+  function tryUnlockList(which: "l1" | "l2" | "l3") {
     if (unlockPassword.trim() !== LIST1_EDIT_PASSWORD) {
       setError(
         which === "l1"
           ? "Mot de passe incorrect. Liste 1 reste verrouillée."
-          : "Mot de passe incorrect. Liste 2 reste verrouillée.",
+          : which === "l2"
+            ? "Mot de passe incorrect. Liste 2 reste verrouillée."
+            : "Mot de passe incorrect. Liste 3 reste verrouillée.",
       );
       return;
     }
     if (which === "l1") setList1Unlocked(true);
-    else setList2Unlocked(true);
+    else if (which === "l2") setList2Unlocked(true);
+    else setList3Unlocked(true);
     setUnlockOpen(null);
     setUnlockPassword("");
     setError("");
     setInfo(
       which === "l1"
         ? "Liste 1 déverrouillée. Vous pouvez modifier les places."
-        : "Liste 2 déverrouillée. Vous pouvez modifier les places.",
+        : which === "l2"
+          ? "Liste 2 déverrouillée. Vous pouvez modifier les places."
+          : "Liste 3 déverrouillée. Vous pouvez modifier les places.",
     );
   }
 
@@ -206,23 +227,28 @@ export default function AdminFinalPage() {
     return built.seuil || "—";
   }
 
-  async function doExport(round: 1 | 2, format: "excel" | "pdf") {
-    const tag = `${round === 1 ? "l1" : "l2"}-${format}` as
+  async function doExport(round: 1 | 2 | 3, format: "excel" | "pdf") {
+    const tag = `${round === 1 ? "l1" : round === 2 ? "l2" : "l3"}-${format}` as
       | "l1-excel"
       | "l1-pdf"
       | "l2-excel"
-      | "l2-pdf";
+      | "l2-pdf"
+      | "l3-excel"
+      | "l3-pdf";
     setExporting(tag);
     setError("");
     setInfo("");
     try {
       const bodyPlaces: Record<string, number> = {};
       const bodyExtra: Record<string, number> = {};
+      const bodyThird: Record<string, number> = {};
       for (const f of FILIERES) {
         const n = Number.parseInt(String(places[f.code] || "").trim(), 10);
         const m = Number.parseInt(String(extra[f.code] || "").trim(), 10);
+        const t = Number.parseInt(String(third[f.code] || "").trim(), 10);
         if (Number.isFinite(n) && n > 0) bodyPlaces[f.code] = n;
         if (Number.isFinite(m) && m > 0) bodyExtra[f.code] = m;
+        if (Number.isFinite(t) && t > 0) bodyThird[f.code] = t;
       }
       if (round === 1 && Object.keys(bodyPlaces).length === 0) {
         setError("Indiquez au moins un nombre de places (> 0).");
@@ -232,6 +258,10 @@ export default function AdminFinalPage() {
         setError("Indiquez au moins un nombre pour la liste 2 (> 0).");
         return;
       }
+      if (round === 3 && Object.keys(bodyThird).length === 0) {
+        setError("Indiquez au moins un nombre pour la liste 3 (> 0).");
+        return;
+      }
 
       const res = await fetch("/api/admin/final/export", {
         method: "POST",
@@ -239,6 +269,7 @@ export default function AdminFinalPage() {
         body: JSON.stringify({
           places: bodyPlaces,
           extra: bodyExtra,
+          third: bodyThird,
           format,
           round,
         }),
@@ -264,13 +295,17 @@ export default function AdminFinalPage() {
       a.remove();
       URL.revokeObjectURL(url);
       setInfo(
-        round === 2
+        round === 3
           ? format === "pdf"
-            ? "PDF liste 2 téléchargé — étudiants juste après le seuil de la liste 1."
-            : "Excel liste 2 téléchargé — suite du classement, sans les étudiants de la liste 1."
-          : format === "pdf"
-            ? "PDF liste 1 téléchargé — top scores selon les places."
-            : "Excel liste 1 téléchargé — top scores selon les places.",
+            ? "PDF liste 3 téléchargé — étudiants juste après le cutoff de la liste 2."
+            : "Excel liste 3 téléchargé — suite du classement, sans L1 ni L2."
+          : round === 2
+            ? format === "pdf"
+              ? "PDF liste 2 téléchargé — étudiants juste après le seuil de la liste 1."
+              : "Excel liste 2 téléchargé — suite du classement, sans les étudiants de la liste 1."
+            : format === "pdf"
+              ? "PDF liste 1 téléchargé — top scores selon les places."
+              : "Excel liste 1 téléchargé — top scores selon les places.",
       );
     } catch {
       setError("Erreur réseau pendant l'export.");
@@ -394,8 +429,8 @@ export default function AdminFinalPage() {
             Final
           </h2>
           <p className="mt-1 max-w-2xl text-[var(--muted)]">
-            Liste 1 : top N + ex aequo + seuil publié. Liste 2 : suivants
-            strictement sous le seuil, sans aucun CNE de la liste 1, sans
+            Liste 1 : top N + ex aequo + seuil publié. Liste 2 / 3 : suivants
+            strictement sous le cutoff précédent, sans CNE déjà retenus, sans
             trou dans le classement. Hors délai &gt; seuil → TO CONTACT
             (Excel). Verrouillez la 1ère vague hors délai, puis exportez
             « Nouveaux » pour les inserts suivants uniquement.
@@ -443,6 +478,22 @@ export default function AdminFinalPage() {
               className="rounded-xl border border-[var(--accent)] bg-white px-4 py-2.5 text-sm font-semibold text-[var(--accent)] hover:bg-[var(--bg)] disabled:opacity-50"
             >
               {exporting === "l2-pdf" ? "PDF…" : "Liste 2 PDF"}
+            </button>
+            <button
+              type="button"
+              disabled={exporting !== null || thirdCount === 0}
+              onClick={() => void doExport(3, "excel")}
+              className="rounded-xl border border-[var(--brand)] bg-white px-4 py-2.5 text-sm font-semibold text-[var(--brand)] hover:bg-[var(--bg)] disabled:opacity-50"
+            >
+              {exporting === "l3-excel" ? "Excel…" : "Liste 3 Excel"}
+            </button>
+            <button
+              type="button"
+              disabled={exporting !== null || thirdCount === 0}
+              onClick={() => void doExport(3, "pdf")}
+              className="rounded-xl border border-[var(--accent)] bg-white px-4 py-2.5 text-sm font-semibold text-[var(--accent)] hover:bg-[var(--bg)] disabled:opacity-50"
+            >
+              {exporting === "l3-pdf" ? "PDF…" : "Liste 3 PDF"}
             </button>
             <button
               type="button"
@@ -511,7 +562,7 @@ export default function AdminFinalPage() {
       <section className="mt-6 overflow-x-auto rounded-2xl border border-[var(--line)] bg-[var(--bg-card)] p-5">
         <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
           <p className="text-sm text-[var(--muted)]">
-            Liste 1 et Liste 2 sont verrouillées pour éviter une modification
+            Liste 1, 2 et 3 sont verrouillées pour éviter une modification
             accidentelle.
           </p>
           <div className="flex flex-wrap gap-2">
@@ -567,14 +618,47 @@ export default function AdminFinalPage() {
                 Modifier liste 2
               </button>
             )}
+            {list3Unlocked ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setList3Unlocked(false);
+                  setUnlockOpen(null);
+                  setUnlockPassword("");
+                  setInfo("Liste 3 verrouillée.");
+                }}
+                className="rounded-xl border border-[var(--line)] bg-white px-4 py-2 text-sm font-semibold"
+              >
+                Verrouiller liste 3
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setUnlockOpen((v) => (v === "l3" ? null : "l3"));
+                  setUnlockPassword("");
+                  setError("");
+                }}
+                className="rounded-xl border border-[var(--line)] bg-white px-4 py-2 text-sm font-semibold"
+              >
+                Modifier liste 3
+              </button>
+            )}
           </div>
         </div>
         {unlockOpen &&
         ((unlockOpen === "l1" && !list1Unlocked) ||
-          (unlockOpen === "l2" && !list2Unlocked)) ? (
+          (unlockOpen === "l2" && !list2Unlocked) ||
+          (unlockOpen === "l3" && !list3Unlocked)) ? (
           <div className="mb-4 flex flex-wrap items-end gap-2">
             <label className="text-sm font-medium">
-              Mot de passe ({unlockOpen === "l1" ? "Liste 1" : "Liste 2"})
+              Mot de passe (
+              {unlockOpen === "l1"
+                ? "Liste 1"
+                : unlockOpen === "l2"
+                  ? "Liste 2"
+                  : "Liste 3"}
+              )
               <input
                 type="password"
                 value={unlockPassword}
@@ -599,7 +683,7 @@ export default function AdminFinalPage() {
         {loading ? (
           <p className="text-sm text-[var(--muted)]">Chargement…</p>
         ) : (
-          <table className="w-full min-w-[860px] text-left text-sm">
+          <table className="w-full min-w-[980px] text-left text-sm">
             <thead>
               <tr className="border-b border-[var(--line)] text-[var(--muted)]">
                 <th className="py-2 pr-3 font-medium">Code</th>
@@ -607,7 +691,8 @@ export default function AdminFinalPage() {
                 <th className="py-2 pr-3 font-medium">Confirmés</th>
                 <th className="py-2 pr-3 font-medium">Liste 1 (N)</th>
                 <th className="py-2 pr-3 font-medium">Seuil</th>
-                <th className="py-2 font-medium">Liste 2 (+)</th>
+                <th className="py-2 pr-3 font-medium">Liste 2 (+)</th>
+                <th className="py-2 font-medium">Liste 3 (+)</th>
               </tr>
             </thead>
             <tbody>
@@ -648,13 +733,13 @@ export default function AdminFinalPage() {
                             [f.code]: e.target.value,
                           }))
                         }
-                        className="w-28 rounded-xl border border-[var(--line)] bg-white px-3 py-2 outline-none ring-[var(--brand)] focus:ring-2 disabled:cursor-not-allowed disabled:bg-[var(--bg)] disabled:text-[var(--muted)]"
+                        className="w-24 rounded-xl border border-[var(--line)] bg-white px-3 py-2 outline-none ring-[var(--brand)] focus:ring-2 disabled:cursor-not-allowed disabled:bg-[var(--bg)] disabled:text-[var(--muted)]"
                       />
                     </td>
                     <td className="py-3 pr-3 font-medium text-[var(--ink)]">
                       {seuilOf(f.code)}
                     </td>
-                    <td className="py-3">
+                    <td className="py-3 pr-3">
                       <input
                         type="number"
                         min={0}
@@ -669,7 +754,25 @@ export default function AdminFinalPage() {
                             [f.code]: e.target.value,
                           }))
                         }
-                        className="w-28 rounded-xl border border-[var(--line)] bg-white px-3 py-2 outline-none ring-[var(--brand)] focus:ring-2 disabled:cursor-not-allowed disabled:bg-[var(--bg)] disabled:text-[var(--muted)]"
+                        className="w-24 rounded-xl border border-[var(--line)] bg-white px-3 py-2 outline-none ring-[var(--brand)] focus:ring-2 disabled:cursor-not-allowed disabled:bg-[var(--bg)] disabled:text-[var(--muted)]"
+                      />
+                    </td>
+                    <td className="py-3">
+                      <input
+                        type="number"
+                        min={0}
+                        step={1}
+                        inputMode="numeric"
+                        placeholder="ex. 10"
+                        value={third[f.code] || ""}
+                        disabled={!list3Unlocked}
+                        onChange={(e) =>
+                          setThird((prev) => ({
+                            ...prev,
+                            [f.code]: e.target.value,
+                          }))
+                        }
+                        className="w-24 rounded-xl border border-[var(--line)] bg-white px-3 py-2 outline-none ring-[var(--brand)] focus:ring-2 disabled:cursor-not-allowed disabled:bg-[var(--bg)] disabled:text-[var(--muted)]"
                       />
                     </td>
                   </tr>
