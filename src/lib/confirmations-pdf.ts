@@ -36,13 +36,10 @@ function parseScore(row: StudentRow): number {
 }
 
 function logoPath(): string | null {
-  const candidates = [
-    path.join(process.cwd(), "public", "estm-header.png"),
-    path.join(process.cwd(), "scripts", "estm-header.png"),
-  ];
-  for (const p of candidates) {
-    if (fs.existsSync(p)) return p;
-  }
+  const primary = path.join(process.cwd(), "public", "estm-header.png");
+  if (fs.existsSync(/*turbopackIgnore: true*/ primary)) return primary;
+  const fallback = path.join(process.cwd(), "scripts", "estm-header.png");
+  if (fs.existsSync(/*turbopackIgnore: true*/ fallback)) return fallback;
   return null;
 }
 
