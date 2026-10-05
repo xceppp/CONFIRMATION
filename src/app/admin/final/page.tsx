@@ -80,7 +80,8 @@ export default function AdminFinalPage() {
     | null
   >(null);
   const [list1Unlocked, setList1Unlocked] = useState(false);
-  const [unlockOpen, setUnlockOpen] = useState(false);
+  const [list2Unlocked, setList2Unlocked] = useState(false);
+  const [unlockOpen, setUnlockOpen] = useState<"l1" | "l2" | null>(null);
   const [unlockPassword, setUnlockPassword] = useState("");
   const [horsLockedCount, setHorsLockedCount] = useState(0);
   const [horsLockedAt, setHorsLockedAt] = useState("");
@@ -175,16 +176,25 @@ export default function AdminFinalPage() {
     [extra],
   );
 
-  function tryUnlockList1() {
+  function tryUnlockList(which: "l1" | "l2") {
     if (unlockPassword.trim() !== LIST1_EDIT_PASSWORD) {
-      setError("Mot de passe incorrect. Liste 1 reste verrouillée.");
+      setError(
+        which === "l1"
+          ? "Mot de passe incorrect. Liste 1 reste verrouillée."
+          : "Mot de passe incorrect. Liste 2 reste verrouillée.",
+      );
       return;
     }
-    setList1Unlocked(true);
-    setUnlockOpen(false);
+    if (which === "l1") setList1Unlocked(true);
+    else setList2Unlocked(true);
+    setUnlockOpen(null);
     setUnlockPassword("");
     setError("");
-    setInfo("Liste 1 déverrouillée. Vous pouvez modifier les places.");
+    setInfo(
+      which === "l1"
+        ? "Liste 1 déverrouillée. Vous pouvez modifier les places."
+        : "Liste 2 déverrouillée. Vous pouvez modifier les places.",
+    );
   }
 
   function seuilOf(code: string): string {
@@ -501,46 +511,77 @@ export default function AdminFinalPage() {
       <section className="mt-6 overflow-x-auto rounded-2xl border border-[var(--line)] bg-[var(--bg-card)] p-5">
         <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
           <p className="text-sm text-[var(--muted)]">
-            Liste 1 est verrouillée pour éviter une modification accidentelle.
-            Liste 2 reste libre.
+            Liste 1 et Liste 2 sont verrouillées pour éviter une modification
+            accidentelle.
           </p>
-          {list1Unlocked ? (
-            <button
-              type="button"
-              onClick={() => {
-                setList1Unlocked(false);
-                setUnlockOpen(false);
-                setUnlockPassword("");
-                setInfo("Liste 1 verrouillée.");
-              }}
-              className="rounded-xl border border-[var(--line)] bg-white px-4 py-2 text-sm font-semibold"
-            >
-              Verrouiller liste 1
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => {
-                setUnlockOpen((v) => !v);
-                setUnlockPassword("");
-                setError("");
-              }}
-              className="rounded-xl border border-[var(--line)] bg-white px-4 py-2 text-sm font-semibold"
-            >
-              Modifier liste 1
-            </button>
-          )}
+          <div className="flex flex-wrap gap-2">
+            {list1Unlocked ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setList1Unlocked(false);
+                  setUnlockOpen(null);
+                  setUnlockPassword("");
+                  setInfo("Liste 1 verrouillée.");
+                }}
+                className="rounded-xl border border-[var(--line)] bg-white px-4 py-2 text-sm font-semibold"
+              >
+                Verrouiller liste 1
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setUnlockOpen((v) => (v === "l1" ? null : "l1"));
+                  setUnlockPassword("");
+                  setError("");
+                }}
+                className="rounded-xl border border-[var(--line)] bg-white px-4 py-2 text-sm font-semibold"
+              >
+                Modifier liste 1
+              </button>
+            )}
+            {list2Unlocked ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setList2Unlocked(false);
+                  setUnlockOpen(null);
+                  setUnlockPassword("");
+                  setInfo("Liste 2 verrouillée.");
+                }}
+                className="rounded-xl border border-[var(--line)] bg-white px-4 py-2 text-sm font-semibold"
+              >
+                Verrouiller liste 2
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setUnlockOpen((v) => (v === "l2" ? null : "l2"));
+                  setUnlockPassword("");
+                  setError("");
+                }}
+                className="rounded-xl border border-[var(--line)] bg-white px-4 py-2 text-sm font-semibold"
+              >
+                Modifier liste 2
+              </button>
+            )}
+          </div>
         </div>
-        {unlockOpen && !list1Unlocked ? (
+        {unlockOpen &&
+        ((unlockOpen === "l1" && !list1Unlocked) ||
+          (unlockOpen === "l2" && !list2Unlocked)) ? (
           <div className="mb-4 flex flex-wrap items-end gap-2">
             <label className="text-sm font-medium">
-              Mot de passe
+              Mot de passe ({unlockOpen === "l1" ? "Liste 1" : "Liste 2"})
               <input
                 type="password"
                 value={unlockPassword}
                 onChange={(e) => setUnlockPassword(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") tryUnlockList1();
+                  if (e.key === "Enter" && unlockOpen)
+                    tryUnlockList(unlockOpen);
                 }}
                 autoComplete="off"
                 className="mt-1.5 block w-40 rounded-xl border border-[var(--line)] bg-white px-3 py-2 outline-none ring-[var(--brand)] focus:ring-2"
@@ -548,7 +589,7 @@ export default function AdminFinalPage() {
             </label>
             <button
               type="button"
-              onClick={tryUnlockList1}
+              onClick={() => unlockOpen && tryUnlockList(unlockOpen)}
               className="rounded-xl bg-[var(--brand)] px-4 py-2 text-sm font-semibold text-white"
             >
               Déverrouiller
@@ -621,13 +662,14 @@ export default function AdminFinalPage() {
                         inputMode="numeric"
                         placeholder="ex. 25"
                         value={extra[f.code] || ""}
+                        disabled={!list2Unlocked}
                         onChange={(e) =>
                           setExtra((prev) => ({
                             ...prev,
                             [f.code]: e.target.value,
                           }))
                         }
-                        className="w-28 rounded-xl border border-[var(--line)] bg-white px-3 py-2 outline-none ring-[var(--brand)] focus:ring-2"
+                        className="w-28 rounded-xl border border-[var(--line)] bg-white px-3 py-2 outline-none ring-[var(--brand)] focus:ring-2 disabled:cursor-not-allowed disabled:bg-[var(--bg)] disabled:text-[var(--muted)]"
                       />
                     </td>
                   </tr>
