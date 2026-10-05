@@ -322,6 +322,23 @@ export const PUBLISHED_LIST1_SEUIL: Record<string, number> = {
   TM: 14.9628,
 };
 
+/**
+ * Published liste-2 floor = last student on the exported Liste 2
+ * (admis_liste2_2026-09-30). Liste 3 / TO CONTACT use this seuil 2.
+ */
+export const PUBLISHED_LIST2_SEUIL: Record<string, number> = {
+  DWM: 14.1668,
+  FBA: 13.872,
+  GC: 14.766,
+  GETE: 15.6553,
+  GI: 16.4963,
+  GTE: 14.261,
+  IATE: 15.7913,
+  PMD: 12.2493,
+  TCC: 12.693,
+  TM: 14.8623,
+};
+
 /** Late manual confirmation flag. */
 export function isHorsDelai(row: { HorsDelai?: string }): boolean {
   const v = String(row.HorsDelai || "")
@@ -439,10 +456,12 @@ export function buildFinalPoolForFiliere(
       parseScore(b) - parseScore(a) || rowCne(a).localeCompare(rowCne(b)),
   );
 
-  // Liste 2 cutoff = last of the next `list2` seats under seuil 1.
+  // Liste 2 cutoff = last of the next `list2` seats under seuil 1,
+  // locked to the published Liste 2 last-student score when available.
   let seuilList2 = "";
   let seuil2Num = Number.NEGATIVE_INFINITY;
   const want2 = Math.max(0, Math.floor(list2));
+  const published2 = PUBLISHED_LIST2_SEUIL[code];
   if (want2 > 0 && Number.isFinite(seuilNum)) {
     const afterL1 = pool.filter((row) => parseScore(row) < seuilNum - 1e-6);
     let take = Math.min(want2, afterL1.length);
@@ -460,6 +479,11 @@ export function buildFinalPoolForFiliere(
         seuilList2 = cellValue(lastSecond, "Score");
       }
     }
+  }
+  if (want2 > 0 && Number.isFinite(published2)) {
+    // Official exported Liste 2 last score wins.
+    seuil2Num = published2;
+    seuilList2 = String(published2);
   }
 
   // After Liste 2 exists, TO CONTACT bar = seuil 2 (last of list 2).
@@ -614,10 +638,15 @@ export function selectFinalRound(
     const second = takeWithTies(afterL1, list2);
     const secondCnes = new Set(second.map(rowCne).filter(Boolean));
     const lastSecond = second[second.length - 1];
-    const seuil2Num =
+    const published2 = PUBLISHED_LIST2_SEUIL[f.code];
+    let seuil2Num =
       lastSecond != null ? parseScore(lastSecond) : Number.NEGATIVE_INFINITY;
-    const seuilList2 =
+    let seuilList2 =
       lastSecond != null ? cellValue(lastSecond, "Score") : "";
+    if (Number.isFinite(published2)) {
+      seuil2Num = published2;
+      seuilList2 = String(published2);
+    }
 
     let picked: StudentRow[];
     if (round === 1) {

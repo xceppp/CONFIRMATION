@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { buildFinalPoolForFiliere, isHorsDelai } from "@/lib/confirmations-export";
+import { buildFinalPoolForFiliere, isHorsDelai, PUBLISHED_LIST2_SEUIL } from "@/lib/confirmations-export";
 import { FILIERES, resolveFiliereFromLabel } from "@/lib/filieres";
 
 type ConfCounts = Record<string, number>;
@@ -228,10 +228,16 @@ export default function AdminFinalPage() {
   }
 
   function seuil2Of(code: string): string {
-    const n = Number.parseInt(places[code] || "", 10);
     const m = Number.parseInt(extra[code] || "", 10);
-    if (!Number.isFinite(n) || n <= 0) return "—";
     if (!Number.isFinite(m) || m <= 0) return "—";
+    const published = (
+      awaitablePublishedList2() as Record<string, number>
+    )[code];
+    if (published != null && Number.isFinite(published)) {
+      return String(published);
+    }
+    const n = Number.parseInt(places[code] || "", 10);
+    if (!Number.isFinite(n) || n <= 0) return "—";
     const f = FILIERES.find((x) => x.code === code);
     if (!f) return "—";
     const built = buildFinalPoolForFiliere(confRows, f.code, f.name, n, m);
