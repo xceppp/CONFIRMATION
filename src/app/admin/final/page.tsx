@@ -230,9 +230,7 @@ export default function AdminFinalPage() {
   function seuil2Of(code: string): string {
     const m = Number.parseInt(extra[code] || "", 10);
     if (!Number.isFinite(m) || m <= 0) return "—";
-    const published = (
-      awaitablePublishedList2() as Record<string, number>
-    )[code];
+    const published = PUBLISHED_LIST2_SEUIL[code];
     if (published != null && Number.isFinite(published)) {
       return String(published);
     }
