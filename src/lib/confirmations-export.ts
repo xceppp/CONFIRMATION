@@ -339,6 +339,29 @@ export const PUBLISHED_LIST2_SEUIL: Record<string, number> = {
   TM: 14.8623,
 };
 
+/**
+ * Published liste-3 floor = last student on admis_liste3_2026-10-05 (4)
+ * (PMD last kept at ≥ 12 floor).
+ */
+export const PUBLISHED_LIST3_SEUIL: Record<string, number> = {
+  DWM: 14.1408,
+  FBA: 13.7313,
+  GC: 14.733,
+  GETE: 15.5643,
+  GI: 16.2858,
+  GTE: 14.1785,
+  IATE: 15.5935,
+  PMD: 12.048,
+  TCC: 12.3663,
+  TM: 14.778,
+};
+
+/**
+ * Absolute floor for any admitted list (L1 / L2 / L3).
+ * Nobody strictly below 12 is published — empty places stay empty.
+ */
+export const MIN_ADMIS_SCORE = 12;
+
 /** Late manual confirmation flag. */
 export function isHorsDelai(row: { HorsDelai?: string }): boolean {
   const v = String(row.HorsDelai || "")
@@ -397,7 +420,8 @@ export function liste1CutoffIndex(
  * Hors délai at or under → join the normal pool like on-time students.
  *
  * Contact seuil:
- * - list2 places given → last student of Liste 2 (seuil 2, lower bar)
+ * - list3 places given → last student of Liste 3 (seuil 3)
+ * - else list2 places → last of Liste 2 (seuil 2)
  * - otherwise → Liste 1 seuil
  */
 export function buildFinalPoolForFiliere(
@@ -406,12 +430,15 @@ export function buildFinalPoolForFiliere(
   name: string,
   list1: number,
   list2 = 0,
+  list3 = 0,
 ): {
   pool: StudentRow[];
   seuil: string;
   seuilNum: number;
   seuilList2: string;
   seuil2Num: number;
+  seuilList3: string;
+  seuil3Num: number;
   toContact: StudentRow[];
   contactSeuil: string;
   contactSeuilNum: number;
@@ -486,10 +513,56 @@ export function buildFinalPoolForFiliere(
     seuilList2 = String(published2);
   }
 
-  // After Liste 2 exists, TO CONTACT bar = seuil 2 (last of list 2).
-  const useSeuil2 = want2 > 0 && Number.isFinite(seuil2Num) && seuil2Num > -Infinity;
-  const contactSeuilNum = useSeuil2 ? seuil2Num : seuilNum;
-  const contactSeuil = useSeuil2 ? seuilList2 : seuil;
+  // Liste 3 cutoff = last of the next `list3` seats under seuil 2.
+  let seuilList3 = "";
+  let seuil3Num = Number.NEGATIVE_INFINITY;
+  const want3 = Math.max(0, Math.floor(list3));
+  const published3 = PUBLISHED_LIST3_SEUIL[code];
+  if (want3 > 0 && Number.isFinite(seuil2Num) && seuil2Num > -Infinity) {
+    const afterL2 = pool.filter(
+      (row) =>
+        parseScore(row) < seuil2Num - 1e-6 &&
+        parseScore(row) + 1e-6 >= MIN_ADMIS_SCORE,
+    );
+    let take = Math.min(want3, afterL2.length);
+    if (take > 0) {
+      const cut = parseScore(afterL2[take - 1]);
+      while (
+        take < afterL2.length &&
+        parseScore(afterL2[take]) + 1e-6 >= cut
+      ) {
+        take += 1;
+      }
+      const lastThird = afterL2[take - 1];
+      if (lastThird) {
+        seuil3Num = parseScore(lastThird);
+        seuilList3 = cellValue(lastThird, "Score");
+      }
+    }
+  }
+  if (want3 > 0 && Number.isFinite(published3)) {
+    seuil3Num = published3;
+    seuilList3 = String(published3);
+  }
+
+  // Contact bar: seuil 3 if L3 set, else seuil 2 if L2 set, else seuil 1.
+  const useSeuil3 =
+    want3 > 0 && Number.isFinite(seuil3Num) && seuil3Num > -Infinity;
+  const useSeuil2 =
+    !useSeuil3 &&
+    want2 > 0 &&
+    Number.isFinite(seuil2Num) &&
+    seuil2Num > -Infinity;
+  const contactSeuilNum = useSeuil3
+    ? seuil3Num
+    : useSeuil2
+      ? seuil2Num
+      : seuilNum;
+  const contactSeuil = useSeuil3
+    ? seuilList3
+    : useSeuil2
+      ? seuilList2
+      : seuil;
 
   const toContact = late
     .filter((r) => parseScore(r) > contactSeuilNum + 1e-6)
@@ -504,6 +577,8 @@ export function buildFinalPoolForFiliere(
     seuilNum,
     seuilList2,
     seuil2Num,
+    seuilList3,
+    seuil3Num,
     toContact,
     contactSeuil,
     contactSeuilNum,
@@ -521,8 +596,8 @@ function rowCne(row: StudentRow): string {
  * List 2 = next students strictly below the liste-1 seuil, never anyone from list 1.
  * List 3 = next students strictly below the liste-2 cutoff, never L1/L2 CNEs.
  *   If places remain empty, fill from Liste-2 TO CONTACT (hors délai > seuil 1).
- * TO CONTACT: L2 Excel uses seuil 1; L3 Excel uses seuil 2 (last of list 2),
- *   excluding anyone already locked as L2 à contacter.
+ * TO CONTACT: L2 Excel uses seuil 1; L3 Excel uses seuil 3 (last of list 3)
+ *   when list3 places are set (else seuil 2), excluding L2-already-contacted.
  * Ties at each cutoff stay together (nobody cut mid-ex-aequo).
  * Hors délai above the contact seuil → `toContact` only (Excel), never PDF unless L3 fill.
  */
@@ -542,8 +617,10 @@ export function selectFinalRound(
     shortfall: number;
     list1: number;
     list2: number;
+    list3: number;
     seuil: string;
     seuilList2: string;
+    seuilList3: string;
   }[];
   toContact: { code: string; name: string; rows: StudentRow[] }[];
 } {
@@ -562,24 +639,32 @@ export function selectFinalRound(
     shortfall: number;
     list1: number;
     list2: number;
+    list3: number;
     seuil: string;
     seuilList2: string;
+    seuilList3: string;
   }[] = [];
   const toContact: { code: string; name: string; rows: StudentRow[] }[] = [];
   const list2ToContactCnes = options?.list2ToContactCnes;
 
+  function eligibleAdmis(row: StudentRow): boolean {
+    return parseScore(row) + 1e-6 >= MIN_ADMIS_SCORE;
+  }
+
   function takeWithTies(candidates: StudentRow[], n: number): StudentRow[] {
-    let take = Math.min(Math.max(0, n), candidates.length);
+    // Hard floor: never admit anyone below MIN_ADMIS_SCORE, even if places remain.
+    const pool = candidates.filter(eligibleAdmis);
+    let take = Math.min(Math.max(0, n), pool.length);
     if (take > 0) {
-      const cut = parseScore(candidates[take - 1]);
+      const cut = parseScore(pool[take - 1]);
       while (
-        take < candidates.length &&
-        parseScore(candidates[take]) + 1e-6 >= cut
+        take < pool.length &&
+        parseScore(pool[take]) + 1e-6 >= cut
       ) {
         take += 1;
       }
     }
-    return candidates.slice(0, take);
+    return pool.slice(0, take);
   }
 
   for (const f of specs) {
@@ -591,13 +676,15 @@ export function selectFinalRound(
     if (round === 2 && list1 <= 0) continue;
     if (round === 3 && (list1 <= 0 || list2 <= 0)) continue;
 
-    // L1/L2 contact bar = seuil 1. After list 2 exists (round 3) → seuil 2.
+    // Admis-pool contact exclusion stays on seuil 1 (L2) / seuil 2 (L3 picks).
+    // Seuil 3 is for TO CONTACT exports after Liste 3 — not for cutting L3 admis.
     const built = buildFinalPoolForFiliere(
       rows,
       f.code,
       f.name,
       list1,
       round >= 3 ? list2 : 0,
+      0,
     );
     // Classic > seuil 1 contacts (for L2 lock / L3 seat fill).
     const l1Contact = buildFinalPoolForFiliere(rows, f.code, f.name, list1);
@@ -650,12 +737,14 @@ export function selectFinalRound(
 
     let picked: StudentRow[];
     if (round === 1) {
-      picked = first;
+      // Drop anyone below the absolute floor (ties cannot pull in < 12).
+      picked = first.filter(eligibleAdmis);
     } else if (round === 2) {
       // Never admit TO CONTACT (hors délai > seuil 1) on liste 2.
       picked = second.filter((row) => {
         const cne = rowCne(row);
-        return !(cne && l1ContactCnes.has(cne));
+        if (cne && l1ContactCnes.has(cne)) return false;
+        return eligibleAdmis(row);
       });
     } else {
       // 1) Normal L3: respecting seuil 2 / after L2 cutoff — PDF + list.
@@ -663,12 +752,13 @@ export function selectFinalRound(
         const cne = rowCne(row);
         if (cne && secondCnes.has(cne)) return false;
         if (cne && toContactCnes.has(cne)) return false;
-        if (lastSecond == null) return true;
+        if (lastSecond == null && !Number.isFinite(published2)) return true;
         return parseScore(row) < seuil2Num - 1e-6;
       });
       picked = takeWithTies(afterL2, list3);
 
       // 2) Exception: empty L3 places → fill from Liste-2 TO CONTACT (seuil 1) only.
+      //    Still blocked below MIN_ADMIS_SCORE. Only locked L2-contact CNEs if lock exists.
       const need = Math.max(0, list3 - picked.length);
       if (need > 0 && l1Contact.toContact.length > 0) {
         const pickedCnes = new Set(picked.map(rowCne).filter(Boolean));
@@ -676,6 +766,7 @@ export function selectFinalRound(
           .filter((row) => {
             const cne = rowCne(row);
             if (!cne || pickedCnes.has(cne)) return false;
+            if (!eligibleAdmis(row)) return false;
             if (list2ToContactCnes && list2ToContactCnes.size > 0) {
               return list2ToContactCnes.has(cne);
             }
@@ -688,6 +779,15 @@ export function selectFinalRound(
           );
         picked = [...picked, ...takeWithTies(fillers, need)];
       }
+    }
+
+    const lastThird = picked.length && round === 3 ? picked[picked.length - 1] : null;
+    const published3 = PUBLISHED_LIST3_SEUIL[f.code];
+    let seuilList3 = "";
+    if (round >= 3 && list3 > 0) {
+      if (Number.isFinite(published3)) seuilList3 = String(published3);
+      else if (lastThird) seuilList3 = cellValue(lastThird, "Score");
+      else seuilList3 = built.seuilList3 || "";
     }
 
     selected.push({
@@ -705,8 +805,10 @@ export function selectFinalRound(
       shortfall: Math.max(0, want - picked.length),
       list1,
       list2,
+      list3,
       seuil,
       seuilList2,
+      seuilList3,
     });
     if (built.toContact.length > 0) {
       toContact.push({

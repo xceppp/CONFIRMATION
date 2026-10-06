@@ -87,6 +87,8 @@ async function buildExcel(
     list2: number;
     seuil: string;
     seuilList2: string;
+    list3?: number;
+    seuilList3?: string;
   }[],
   round: 1 | 2 | 3,
   toContact: {
@@ -112,6 +114,7 @@ async function buildExcel(
           "Liste 2",
           "Seuil liste 2",
           "Liste 3 demandée",
+          "Seuil liste 3",
           "Confirmés",
           "Sélectionnés",
           "Manque",
@@ -148,6 +151,7 @@ async function buildExcel(
             s.list2,
             s.seuilList2,
             s.places,
+            s.seuilList3 || "",
             s.confirmed,
             s.selected,
             s.shortfall,
@@ -247,7 +251,7 @@ async function buildExcel(
       "Nom complet",
       "Filière",
       "Score",
-      round >= 3 ? "Seuil liste 2" : "Seuil liste 1",
+      round >= 3 ? "Seuil liste 3" : "Seuil liste 1",
       "Téléphone",
       "Agent",
       "Date confirmation",
@@ -257,7 +261,7 @@ async function buildExcel(
       contact.addRow([
         "—",
         round >= 3
-          ? "Aucun nouveau hors délai à contacter (hors ceux déjà TO CONTACT liste 2)"
+          ? "Aucun nouveau hors délai à contacter (L2 déjà contactés exclus)"
           : "Aucun hors délai au-dessus du seuil",
         "",
         "",
@@ -271,7 +275,7 @@ async function buildExcel(
         const seuil =
           group.seuil ||
           (round >= 3
-            ? summary.find((s) => s.code === group.code)?.seuilList2
+            ? summary.find((s) => s.code === group.code)?.seuilList3
             : summary.find((s) => s.code === group.code)?.seuil) ||
           "";
         for (const row of group.rows) {
@@ -387,24 +391,42 @@ export async function POST(request: Request) {
       for (const f of specs) {
         if (f.list1 <= 0) continue;
         // Liste 2 Excel: TO CONTACT vs seuil 1.
-        // Liste 3 Excel: TO CONTACT vs seuil 2 (last of list 2).
+        // Liste 3 Excel: TO CONTACT vs seuil 3 (last of list 3).
         const built = buildFinalPoolForFiliere(
           rows,
           f.code,
           f.name,
           f.list1,
           round >= 3 ? f.list2 : 0,
+          round >= 3 ? f.list3 : 0,
         );
         if (built.toContact.length === 0) continue;
-        const rowsContact =
-          round === 3 && list2ContactLock.lockedCount > 0
-            ? built.toContact.filter((row) => {
-                const cne = String(row.CNE || row.Code || "")
-                  .trim()
-                  .toUpperCase();
-                return cne && !list2ContactLock.cnes.has(cne);
-              })
-            : built.toContact;
+        // L3 TO CONTACT = NEW only. Never re-list people already contacted on L2:
+        // 1) locked L2 TO CONTACT CNEs (from L2 Excel export)
+        // 2) hors-délai above seuil 1 (classic L2 à-contacter band), even if lock empty
+        let rowsContact = built.toContact;
+        if (round === 3) {
+          const l1Band = buildFinalPoolForFiliere(
+            rows,
+            f.code,
+            f.name,
+            f.list1,
+          );
+          const alreadyL2Contact = new Set(
+            l1Band.toContact.map((row) =>
+              String(row.CNE || row.Code || "")
+                .trim()
+                .toUpperCase(),
+            ),
+          );
+          for (const cne of list2ContactLock.cnes) alreadyL2Contact.add(cne);
+          rowsContact = built.toContact.filter((row) => {
+            const cne = String(row.CNE || row.Code || "")
+              .trim()
+              .toUpperCase();
+            return cne && !alreadyL2Contact.has(cne);
+          });
+        }
         if (rowsContact.length === 0) continue;
         byCode.set(f.code, {
           code: f.code,

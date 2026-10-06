@@ -9,6 +9,7 @@ import {
 import {
   clearHorsDelaiLock,
   getHorsDelaiLockedCnes,
+  getListe2ToContactLockedCnes,
   listConfirmations,
   lockHorsDelaiSelection,
 } from "@/lib/sheets";
@@ -166,6 +167,7 @@ export async function POST(request: Request) {
 
     const places = readPlaces(body, "places");
     const extra = readPlaces(body, "extra");
+    const third = readPlaces(body, "third");
     if (Object.keys(places).length === 0) {
       return NextResponse.json(
         { error: "Indiquez les places liste 1 pour calculer le seuil." },
@@ -182,6 +184,7 @@ export async function POST(request: Request) {
 
     const lock = await getHorsDelaiLockedCnes();
     const hasLock = lock.lockedCount > 0;
+    const list2ContactLock = await getListe2ToContactLockedCnes();
 
     if (onlyNew && !hasLock) {
       return NextResponse.json(
@@ -203,14 +206,23 @@ export async function POST(request: Request) {
       const list1 = places[f.code];
       if (!list1) continue;
       const list2 = extra[f.code] || 0;
-      // With Liste 2 places → contact bar = seuil 2 (last of list 2).
+      const list3 = third[f.code] || 0;
+      // Contact bar: L3 → seuil 3; else L2 → seuil 2; else seuil 1.
       const built = buildFinalPoolForFiliere(
         all,
         f.code,
         f.name,
         list1,
         list2,
+        list3,
       );
+      // Classic L2 à-contacter band (hors délai > seuil 1) — already contacted.
+      const l1Band = buildFinalPoolForFiliere(all, f.code, f.name, list1);
+      const alreadyContactedL2 = new Set(
+        l1Band.toContact.map(rowCne).filter(Boolean),
+      );
+      for (const cne of list2ContactLock.cnes) alreadyContactedL2.add(cne);
+
       const contactSeuil = built.contactSeuil || built.seuil;
       const contactCnes = new Set(
         built.toContact.map(rowCne).filter(Boolean),
@@ -225,7 +237,10 @@ export async function POST(request: Request) {
         else newNormal.push(bucket);
       }
       for (const row of built.toContact) {
-        const inLock = hasLock && lock.cnes.has(rowCne(row));
+        const cne = rowCne(row);
+        // Never re-export people already contacted on Liste 2.
+        if (cne && alreadyContactedL2.has(cne)) continue;
+        const inLock = hasLock && lock.cnes.has(cne);
         const bucket = { row, seuil: contactSeuil, code: f.code };
         if (inLock) lockedContact.push(bucket);
         else newContact.push(bucket);
