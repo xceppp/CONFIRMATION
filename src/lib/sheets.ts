@@ -54,7 +54,8 @@ const confirmingCodes = new Set<string>();
 /** Student DB almost never changes during confirmation day — long TTL. */
 const STUDENTS_TTL_MS = 10 * 60_000;
 /** Confirmations soft-read TTL — append still writes; avoid read storms. */
-const CONFIRMATIONS_TTL_MS = 60_000;
+/** Admin UI cache window — exports still pass force:true when needed. */
+const CONFIRMATIONS_TTL_MS = 3 * 60_000;
 /** After a read quota hit, serve RAM only for this window. */
 let readCooldownUntil = 0;
 

@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { startTransition, useEffect, useMemo, useState } from "react";
 import {
-  buildFinalPoolForFiliere,
-  isHorsDelai,
+  PUBLISHED_LIST1_SEUIL,
   PUBLISHED_LIST2_SEUIL,
   PUBLISHED_LIST3_SEUIL,
 } from "@/lib/confirmations-export";
@@ -15,8 +14,6 @@ const PLACES_STORAGE_KEY = "admin-final-places";
 const EXTRA_STORAGE_KEY = "admin-final-places-2";
 const THIRD_STORAGE_KEY = "admin-final-places-3";
 const LIST1_EDIT_PASSWORD = "1955";
-
-type ConfRow = Record<string, string>;
 
 /** Default Places (N) — used until the admin edits (then remembered locally). */
 const DEFAULT_PLACES: Record<string, string> = {
@@ -72,7 +69,6 @@ export default function AdminFinalPage() {
   const [third, setThird] = useState<Record<string, string>>(emptyExtra);
   const [placesHydrated, setPlacesHydrated] = useState(false);
   const [confirmedByCode, setConfirmedByCode] = useState<ConfCounts>({});
-  const [confRows, setConfRows] = useState<ConfRow[]>([]);
   const [horsCount, setHorsCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState<
@@ -114,7 +110,8 @@ export default function AdminFinalPage() {
     setLoading(true);
     setError("");
     try {
-      const res = await fetch("/api/admin/confirmations");
+      // Light payload: counts only — keeps Final admin instant.
+      const res = await fetch("/api/admin/confirmations?countsOnly=1");
       const data = await res.json();
       if (!res.ok) {
         setError(data.error || "Impossible de charger les confirmations");
@@ -122,27 +119,15 @@ export default function AdminFinalPage() {
       }
       const counts: ConfCounts = {};
       for (const f of FILIERES) counts[f.code] = 0;
-
-      const allRows: ConfRow[] = Array.isArray(data.rows) ? data.rows : [];
-      const rows = allRows.filter((row) => !isHorsDelai(row));
-      if (allRows.length > 0) {
-        for (const row of rows) {
-          const label = String(row.Filiere || row.FiliereCode || "");
-          const match = resolveFiliereFromLabel(label);
-          if (match) counts[match.code] = (counts[match.code] || 0) + 1;
-        }
-      } else {
-        for (const g of data.groups || []) {
-          const match = resolveFiliereFromLabel(String(g.filiere || ""));
-          if (match) {
-            counts[match.code] =
-              (counts[match.code] || 0) + Number(g.count || 0);
-          }
+      for (const g of data.groups || []) {
+        const match = resolveFiliereFromLabel(String(g.filiere || ""));
+        if (match) {
+          counts[match.code] =
+            (counts[match.code] || 0) + Number(g.count || 0);
         }
       }
       setConfirmedByCode(counts);
-      setConfRows(rows);
-      setHorsCount(allRows.filter((row) => isHorsDelai(row)).length);
+      setHorsCount(Number(data.horsCount || 0));
       await loadHorsLockStatus();
     } catch {
       setError("Erreur réseau.");
@@ -159,15 +144,19 @@ export default function AdminFinalPage() {
     void loadCounts();
   }, []);
 
+  // Debounce localStorage writes so typing stays smooth.
   useEffect(() => {
     if (!placesHydrated) return;
-    try {
-      localStorage.setItem(PLACES_STORAGE_KEY, JSON.stringify(places));
-      localStorage.setItem(EXTRA_STORAGE_KEY, JSON.stringify(extra));
-      localStorage.setItem(THIRD_STORAGE_KEY, JSON.stringify(third));
-    } catch {
-      /* quota / private mode */
-    }
+    const t = window.setTimeout(() => {
+      try {
+        localStorage.setItem(PLACES_STORAGE_KEY, JSON.stringify(places));
+        localStorage.setItem(EXTRA_STORAGE_KEY, JSON.stringify(extra));
+        localStorage.setItem(THIRD_STORAGE_KEY, JSON.stringify(third));
+      } catch {
+        /* quota / private mode */
+      }
+    }, 250);
+    return () => window.clearTimeout(t);
   }, [places, extra, third, placesHydrated]);
 
   const filledCount = useMemo(
@@ -223,54 +212,57 @@ export default function AdminFinalPage() {
     );
   }
 
-  function seuilOf(code: string): string {
-    const n = Number.parseInt(places[code] || "", 10);
-    if (!Number.isFinite(n) || n <= 0) return "—";
-    const f = FILIERES.find((x) => x.code === code);
-    if (!f) return "—";
-    const built = buildFinalPoolForFiliere(confRows, f.code, f.name, n);
-    return built.seuil || "—";
-  }
+  // Published floors only — no per-keystroke pool rebuild (was freezing the UI).
+  const seuil1ByCode = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const f of FILIERES) {
+      const n = Number.parseInt(places[f.code] || "", 10);
+      if (!Number.isFinite(n) || n <= 0) {
+        out[f.code] = "—";
+        continue;
+      }
+      const published = PUBLISHED_LIST1_SEUIL[f.code];
+      out[f.code] =
+        published != null && Number.isFinite(published)
+          ? String(published)
+          : "—";
+    }
+    return out;
+  }, [places]);
 
-  function seuil2Of(code: string): string {
-    const m = Number.parseInt(extra[code] || "", 10);
-    if (!Number.isFinite(m) || m <= 0) return "—";
-    const published = PUBLISHED_LIST2_SEUIL[code];
-    if (published != null && Number.isFinite(published)) {
-      return String(published);
+  const seuil2ByCode = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const f of FILIERES) {
+      const m = Number.parseInt(extra[f.code] || "", 10);
+      if (!Number.isFinite(m) || m <= 0) {
+        out[f.code] = "—";
+        continue;
+      }
+      const published = PUBLISHED_LIST2_SEUIL[f.code];
+      out[f.code] =
+        published != null && Number.isFinite(published)
+          ? String(published)
+          : "—";
     }
-    const n = Number.parseInt(places[code] || "", 10);
-    if (!Number.isFinite(n) || n <= 0) return "—";
-    const f = FILIERES.find((x) => x.code === code);
-    if (!f) return "—";
-    const built = buildFinalPoolForFiliere(confRows, f.code, f.name, n, m);
-    return built.seuilList2 || "—";
-  }
+    return out;
+  }, [extra]);
 
-  function seuil3Of(code: string): string {
-    const k = Number.parseInt(third[code] || "", 10);
-    if (!Number.isFinite(k) || k <= 0) return "—";
-    const published = PUBLISHED_LIST3_SEUIL[code];
-    if (published != null && Number.isFinite(published)) {
-      return String(published);
+  const seuil3ByCode = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const f of FILIERES) {
+      const k = Number.parseInt(third[f.code] || "", 10);
+      if (!Number.isFinite(k) || k <= 0) {
+        out[f.code] = "—";
+        continue;
+      }
+      const published = PUBLISHED_LIST3_SEUIL[f.code];
+      out[f.code] =
+        published != null && Number.isFinite(published)
+          ? String(published)
+          : "—";
     }
-    const n = Number.parseInt(places[code] || "", 10);
-    const m = Number.parseInt(extra[code] || "", 10);
-    if (!Number.isFinite(n) || n <= 0 || !Number.isFinite(m) || m <= 0) {
-      return "—";
-    }
-    const f = FILIERES.find((x) => x.code === code);
-    if (!f) return "—";
-    const built = buildFinalPoolForFiliere(
-      confRows,
-      f.code,
-      f.name,
-      n,
-      m,
-      k,
-    );
-    return built.seuilList3 || "—";
-  }
+    return out;
+  }, [third]);
 
   async function doExport(round: 1 | 2 | 3, format: "excel" | "pdf") {
     const tag = `${round === 1 ? "l1" : round === 2 ? "l2" : "l3"}-${format}` as
@@ -792,17 +784,18 @@ export default function AdminFinalPage() {
                         placeholder="ex. 50"
                         value={places[f.code]}
                         disabled={!list1Unlocked}
-                        onChange={(e) =>
-                          setPlaces((prev) => ({
-                            ...prev,
-                            [f.code]: e.target.value,
-                          }))
-                        }
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          const code = f.code;
+                          startTransition(() => {
+                            setPlaces((prev) => ({ ...prev, [code]: v }));
+                          });
+                        }}
                         className="w-24 rounded-xl border border-[var(--line)] bg-white px-3 py-2 outline-none ring-[var(--brand)] focus:ring-2 disabled:cursor-not-allowed disabled:bg-[var(--bg)] disabled:text-[var(--muted)]"
                       />
                     </td>
                     <td className="py-3 pr-3 font-medium text-[var(--ink)]">
-                      {seuilOf(f.code)}
+                      {seuil1ByCode[f.code]}
                     </td>
                     <td className="py-3 pr-3">
                       <input
@@ -813,17 +806,18 @@ export default function AdminFinalPage() {
                         placeholder="ex. 25"
                         value={extra[f.code] || ""}
                         disabled={!list2Unlocked}
-                        onChange={(e) =>
-                          setExtra((prev) => ({
-                            ...prev,
-                            [f.code]: e.target.value,
-                          }))
-                        }
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          const code = f.code;
+                          startTransition(() => {
+                            setExtra((prev) => ({ ...prev, [code]: v }));
+                          });
+                        }}
                         className="w-24 rounded-xl border border-[var(--line)] bg-white px-3 py-2 outline-none ring-[var(--brand)] focus:ring-2 disabled:cursor-not-allowed disabled:bg-[var(--bg)] disabled:text-[var(--muted)]"
                       />
                     </td>
                     <td className="py-3 pr-3 font-medium text-[var(--ink)]">
-                      {seuil2Of(f.code)}
+                      {seuil2ByCode[f.code]}
                     </td>
                     <td className="py-3 pr-3">
                       <input
@@ -834,17 +828,18 @@ export default function AdminFinalPage() {
                         placeholder="ex. 10"
                         value={third[f.code] || ""}
                         disabled={!list3Unlocked}
-                        onChange={(e) =>
-                          setThird((prev) => ({
-                            ...prev,
-                            [f.code]: e.target.value,
-                          }))
-                        }
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          const code = f.code;
+                          startTransition(() => {
+                            setThird((prev) => ({ ...prev, [code]: v }));
+                          });
+                        }}
                         className="w-24 rounded-xl border border-[var(--line)] bg-white px-3 py-2 outline-none ring-[var(--brand)] focus:ring-2 disabled:cursor-not-allowed disabled:bg-[var(--bg)] disabled:text-[var(--muted)]"
                       />
                     </td>
                     <td className="py-3 font-medium text-[var(--ink)]">
-                      {seuil3Of(f.code)}
+                      {seuil3ByCode[f.code]}
                     </td>
                   </tr>
                 );
