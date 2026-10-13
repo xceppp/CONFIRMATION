@@ -5,6 +5,7 @@ import {
   buildFinalPoolForFiliere,
   cellValue,
   isHorsDelai,
+  selectFinalRound,
 } from "@/lib/confirmations-export";
 import {
   clearHorsDelaiLock,
@@ -168,6 +169,8 @@ export async function POST(request: Request) {
     const places = readPlaces(body, "places");
     const extra = readPlaces(body, "extra");
     const third = readPlaces(body, "third");
+    const fourth = readPlaces(body, "fourth");
+    const fifth = readPlaces(body, "fifth");
     if (Object.keys(places).length === 0) {
       return NextResponse.json(
         { error: "Indiquez les places liste 1 pour calculer le seuil." },
@@ -244,6 +247,74 @@ export async function POST(request: Request) {
         const bucket = { row, seuil: contactSeuil, code: f.code };
         if (inLock) lockedContact.push(bucket);
         else newContact.push(bucket);
+      }
+    }
+
+    const use5 = Object.values(fifth).some((n) => n > 0);
+    const use4 = Object.values(fourth).some((n) => n > 0);
+    if (use4) {
+      const specs = FILIERES.flatMap((f) => {
+        const list1 = places[f.code] || 0;
+        const list4n = fourth[f.code] || 0;
+        const list5n = fifth[f.code] || 0;
+        if (list1 <= 0 || (extra[f.code] || 0) <= 0 || (third[f.code] || 0) <= 0)
+          return [];
+        if (list4n <= 0) return [];
+        if (use5 && list5n <= 0) return [];
+        return [
+          {
+            code: f.code,
+            name: f.name,
+            list1,
+            list2: extra[f.code] || 0,
+            list3: third[f.code] || 0,
+            list4: list4n,
+            list5: list5n,
+          },
+        ];
+      });
+      const result = selectFinalRound(all, specs, use5 ? 5 : 4);
+      const byCode = new Map(result.summary.map((s) => [s.code, s]));
+      const tagged = [
+        ...lockedNormal.map((b) => ({ b, kind: "ln" as const })),
+        ...newNormal.map((b) => ({ b, kind: "nn" as const })),
+        ...lockedContact.map((b) => ({ b, kind: "lc" as const })),
+        ...newContact.map((b) => ({ b, kind: "nc" as const })),
+      ];
+      lockedNormal.length = 0;
+      newNormal.length = 0;
+      lockedContact.length = 0;
+      newContact.length = 0;
+      for (const { b, kind } of tagged) {
+        const info = byCode.get(b.code);
+        if (!info) {
+          if (kind === "ln") lockedNormal.push(b);
+          else if (kind === "nn") newNormal.push(b);
+          else if (kind === "lc") lockedContact.push(b);
+          else newContact.push(b);
+          continue;
+        }
+        const score = scoreOf(b.row);
+        const floor = Number.parseFloat(
+          String(use5 ? info.seuilList5 : info.seuilList4 || ""),
+        );
+        const ceiling = Number.parseFloat(
+          String(use5 ? info.seuilList4 : info.seuilList3 || ""),
+        );
+        const inLock = hasLock && lock.cnes.has(rowCne(b.row));
+        if (
+          Number.isFinite(floor) &&
+          Number.isFinite(ceiling) &&
+          score > floor + 1e-6 &&
+          score <= ceiling + 1e-6
+        ) {
+          b.seuil = String(floor);
+          if (inLock) lockedContact.push(b);
+          else newContact.push(b);
+        } else if (Number.isFinite(floor) && score <= floor + 1e-6) {
+          if (inLock) lockedNormal.push(b);
+          else newNormal.push(b);
+        }
       }
     }
 

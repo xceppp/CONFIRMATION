@@ -13,6 +13,8 @@ type ConfCounts = Record<string, number>;
 const PLACES_STORAGE_KEY = "admin-final-places";
 const EXTRA_STORAGE_KEY = "admin-final-places-2";
 const THIRD_STORAGE_KEY = "admin-final-places-3";
+const FOURTH_STORAGE_KEY = "admin-final-places-4";
+const FIFTH_STORAGE_KEY = "admin-final-places-5";
 const LIST1_EDIT_PASSWORD = "1955";
 
 /** Default Places (N) — used until the admin edits (then remembered locally). */
@@ -67,6 +69,8 @@ export default function AdminFinalPage() {
   const [places, setPlaces] = useState<Record<string, string>>(emptyPlaces);
   const [extra, setExtra] = useState<Record<string, string>>(emptyExtra);
   const [third, setThird] = useState<Record<string, string>>(emptyExtra);
+  const [fourth, setFourth] = useState<Record<string, string>>(emptyExtra);
+  const [fifth, setFifth] = useState<Record<string, string>>(emptyExtra);
   const [placesHydrated, setPlacesHydrated] = useState(false);
   const [confirmedByCode, setConfirmedByCode] = useState<ConfCounts>({});
   const [horsCount, setHorsCount] = useState(0);
@@ -78,6 +82,10 @@ export default function AdminFinalPage() {
     | "l2-pdf"
     | "l3-excel"
     | "l3-pdf"
+    | "l4-excel"
+    | "l4-pdf"
+    | "l5-excel"
+    | "l5-pdf"
     | "hors"
     | "hors-new"
     | "hors-lock"
@@ -87,7 +95,11 @@ export default function AdminFinalPage() {
   const [list1Unlocked, setList1Unlocked] = useState(false);
   const [list2Unlocked, setList2Unlocked] = useState(false);
   const [list3Unlocked, setList3Unlocked] = useState(false);
-  const [unlockOpen, setUnlockOpen] = useState<"l1" | "l2" | "l3" | null>(null);
+  const [list4Unlocked, setList4Unlocked] = useState(false);
+  const [list5Unlocked, setList5Unlocked] = useState(false);
+  const [unlockOpen, setUnlockOpen] = useState<
+    "l1" | "l2" | "l3" | "l4" | "l5" | null
+  >(null);
   const [unlockPassword, setUnlockPassword] = useState("");
   const [horsLockedCount, setHorsLockedCount] = useState(0);
   const [horsLockedAt, setHorsLockedAt] = useState("");
@@ -140,6 +152,8 @@ export default function AdminFinalPage() {
     setPlaces(loadSavedMap(PLACES_STORAGE_KEY, emptyPlaces()));
     setExtra(loadSavedMap(EXTRA_STORAGE_KEY, emptyExtra()));
     setThird(loadSavedMap(THIRD_STORAGE_KEY, emptyExtra()));
+    setFourth(loadSavedMap(FOURTH_STORAGE_KEY, emptyExtra()));
+    setFifth(loadSavedMap(FIFTH_STORAGE_KEY, emptyExtra()));
     setPlacesHydrated(true);
     void loadCounts();
   }, []);
@@ -152,12 +166,14 @@ export default function AdminFinalPage() {
         localStorage.setItem(PLACES_STORAGE_KEY, JSON.stringify(places));
         localStorage.setItem(EXTRA_STORAGE_KEY, JSON.stringify(extra));
         localStorage.setItem(THIRD_STORAGE_KEY, JSON.stringify(third));
+        localStorage.setItem(FOURTH_STORAGE_KEY, JSON.stringify(fourth));
+        localStorage.setItem(FIFTH_STORAGE_KEY, JSON.stringify(fifth));
       } catch {
         /* quota / private mode */
       }
     }, 250);
     return () => window.clearTimeout(t);
-  }, [places, extra, third, placesHydrated]);
+  }, [places, extra, third, fourth, fifth, placesHydrated]);
 
   const filledCount = useMemo(
     () =>
@@ -186,29 +202,39 @@ export default function AdminFinalPage() {
     [third],
   );
 
-  function tryUnlockList(which: "l1" | "l2" | "l3") {
+  const fourthCount = useMemo(
+    () =>
+      FILIERES.filter((f) => {
+        const n = Number.parseInt(fourth[f.code] || "", 10);
+        return Number.isFinite(n) && n > 0;
+      }).length,
+    [fourth],
+  );
+
+  const fifthCount = useMemo(
+    () =>
+      FILIERES.filter((f) => {
+        const n = Number.parseInt(fifth[f.code] || "", 10);
+        return Number.isFinite(n) && n > 0;
+      }).length,
+    [fifth],
+  );
+
+  function tryUnlockList(which: "l1" | "l2" | "l3" | "l4" | "l5") {
     if (unlockPassword.trim() !== LIST1_EDIT_PASSWORD) {
-      setError(
-        which === "l1"
-          ? "Mot de passe incorrect. Liste 1 reste verrouillée."
-          : which === "l2"
-            ? "Mot de passe incorrect. Liste 2 reste verrouillée."
-            : "Mot de passe incorrect. Liste 3 reste verrouillée.",
-      );
+      setError(`Mot de passe incorrect. Liste ${which.slice(1)} reste verrouillée.`);
       return;
     }
     if (which === "l1") setList1Unlocked(true);
     else if (which === "l2") setList2Unlocked(true);
-    else setList3Unlocked(true);
+    else if (which === "l3") setList3Unlocked(true);
+    else if (which === "l4") setList4Unlocked(true);
+    else setList5Unlocked(true);
     setUnlockOpen(null);
     setUnlockPassword("");
     setError("");
     setInfo(
-      which === "l1"
-        ? "Liste 1 déverrouillée. Vous pouvez modifier les places."
-        : which === "l2"
-          ? "Liste 2 déverrouillée. Vous pouvez modifier les places."
-          : "Liste 3 déverrouillée. Vous pouvez modifier les places.",
+      `Liste ${which.slice(1)} déverrouillée. Vous pouvez modifier les places.`,
     );
   }
 
@@ -264,14 +290,18 @@ export default function AdminFinalPage() {
     return out;
   }, [third]);
 
-  async function doExport(round: 1 | 2 | 3, format: "excel" | "pdf") {
-    const tag = `${round === 1 ? "l1" : round === 2 ? "l2" : "l3"}-${format}` as
+  async function doExport(round: 1 | 2 | 3 | 4 | 5, format: "excel" | "pdf") {
+    const tag = `l${round}-${format}` as
       | "l1-excel"
       | "l1-pdf"
       | "l2-excel"
       | "l2-pdf"
       | "l3-excel"
-      | "l3-pdf";
+      | "l3-pdf"
+      | "l4-excel"
+      | "l4-pdf"
+      | "l5-excel"
+      | "l5-pdf";
     setExporting(tag);
     setError("");
     setInfo("");
@@ -279,13 +309,19 @@ export default function AdminFinalPage() {
       const bodyPlaces: Record<string, number> = {};
       const bodyExtra: Record<string, number> = {};
       const bodyThird: Record<string, number> = {};
+      const bodyFourth: Record<string, number> = {};
+      const bodyFifth: Record<string, number> = {};
       for (const f of FILIERES) {
         const n = Number.parseInt(String(places[f.code] || "").trim(), 10);
         const m = Number.parseInt(String(extra[f.code] || "").trim(), 10);
         const t = Number.parseInt(String(third[f.code] || "").trim(), 10);
+        const p4 = Number.parseInt(String(fourth[f.code] || "").trim(), 10);
+        const p5 = Number.parseInt(String(fifth[f.code] || "").trim(), 10);
         if (Number.isFinite(n) && n > 0) bodyPlaces[f.code] = n;
         if (Number.isFinite(m) && m > 0) bodyExtra[f.code] = m;
         if (Number.isFinite(t) && t > 0) bodyThird[f.code] = t;
+        if (Number.isFinite(p4) && p4 > 0) bodyFourth[f.code] = p4;
+        if (Number.isFinite(p5) && p5 > 0) bodyFifth[f.code] = p5;
       }
       if (round === 1 && Object.keys(bodyPlaces).length === 0) {
         setError("Indiquez au moins un nombre de places (> 0).");
@@ -299,6 +335,14 @@ export default function AdminFinalPage() {
         setError("Indiquez au moins un nombre pour la liste 3 (> 0).");
         return;
       }
+      if (round === 4 && Object.keys(bodyFourth).length === 0) {
+        setError("Indiquez au moins un nombre pour la liste 4 (> 0).");
+        return;
+      }
+      if (round === 5 && Object.keys(bodyFifth).length === 0) {
+        setError("Indiquez au moins un nombre pour la liste 5 (> 0).");
+        return;
+      }
 
       const res = await fetch("/api/admin/final/export", {
         method: "POST",
@@ -307,6 +351,8 @@ export default function AdminFinalPage() {
           places: bodyPlaces,
           extra: bodyExtra,
           third: bodyThird,
+          fourth: bodyFourth,
+          fifth: bodyFifth,
           format,
           round,
         }),
@@ -332,7 +378,11 @@ export default function AdminFinalPage() {
       a.remove();
       URL.revokeObjectURL(url);
       setInfo(
-        round === 3
+        round === 5
+          ? "Liste 5 : suivants strictement sous le seuil 4, score ≥ 12, sans doublon L1–L4."
+          : round === 4
+            ? "Liste 4 : suivants strictement sous le seuil 3, score ≥ 12, sans doublon L1–L3."
+            : round === 3
           ? format === "pdf"
             ? "PDF liste 3 : admis (seuil) + places restantes remplies depuis TO CONTACT liste 2."
             : "Excel liste 3 : admis (score ≥ 12) + Seuil 3 + TO CONTACT = nouveaux > seuil 3 (L2 déjà contactés exclus)."
@@ -412,13 +462,19 @@ export default function AdminFinalPage() {
       const bodyPlaces: Record<string, number> = {};
       const bodyExtra: Record<string, number> = {};
       const bodyThird: Record<string, number> = {};
+      const bodyFourth: Record<string, number> = {};
+      const bodyFifth: Record<string, number> = {};
       for (const f of FILIERES) {
         const n = Number.parseInt(String(places[f.code] || "").trim(), 10);
         const m = Number.parseInt(String(extra[f.code] || "").trim(), 10);
         const k = Number.parseInt(String(third[f.code] || "").trim(), 10);
+        const p4 = Number.parseInt(String(fourth[f.code] || "").trim(), 10);
+        const p5 = Number.parseInt(String(fifth[f.code] || "").trim(), 10);
         if (Number.isFinite(n) && n > 0) bodyPlaces[f.code] = n;
         if (Number.isFinite(m) && m > 0) bodyExtra[f.code] = m;
         if (Number.isFinite(k) && k > 0) bodyThird[f.code] = k;
+        if (Number.isFinite(p4) && p4 > 0) bodyFourth[f.code] = p4;
+        if (Number.isFinite(p5) && p5 > 0) bodyFifth[f.code] = p5;
       }
       if (Object.keys(bodyPlaces).length === 0) {
         setError("Indiquez les places liste 1 pour calculer le seuil.");
@@ -431,6 +487,8 @@ export default function AdminFinalPage() {
           places: bodyPlaces,
           extra: bodyExtra,
           third: bodyThird,
+          fourth: bodyFourth,
+          fifth: bodyFifth,
           onlyNew,
         }),
       });
@@ -483,12 +541,11 @@ export default function AdminFinalPage() {
             Final
           </h2>
           <p className="mt-1 max-w-2xl text-[var(--muted)]">
-            Liste 1 : top N + ex aequo + seuil 1. Liste 2 : suivants sous le
-            seuil 1 — le dernier de la liste 2 fixe le seuil 2 — le dernier de
-            la liste 3 fixe le seuil 3. Plancher absolu : score ≥ 12. Hors délai
-            &gt; seuil de contact → TO CONTACT : seuil 1 → seuil 2 (après L2) →
-            seuil 3 (après L3). Déjà contactés L2 exclus des exports L3.
-            est renseignée.
+            Liste 1 à 3 : chaque liste continue strictement sous le seuil
+            précédent. Liste 4 sous le seuil 3 publié, Liste 5 sous le seuil 4
+            (dernier admis de la liste 4). Plancher : score ≥ 12. Aucun doublon
+            entre les listes. TO CONTACT d&apos;une liste = seulement la nouvelle
+            tranche, pas les gens déjà contactés.
           </p>
         </div>
         <div className="flex flex-col items-end gap-2">
@@ -549,6 +606,38 @@ export default function AdminFinalPage() {
               className="rounded-xl border border-[var(--accent)] bg-white px-4 py-2.5 text-sm font-semibold text-[var(--accent)] hover:bg-[var(--bg)] disabled:opacity-50"
             >
               {exporting === "l3-pdf" ? "PDF…" : "Liste 3 PDF"}
+            </button>
+            <button
+              type="button"
+              disabled={exporting !== null || fourthCount === 0}
+              onClick={() => void doExport(4, "excel")}
+              className="rounded-xl border border-[var(--brand)] bg-white px-4 py-2.5 text-sm font-semibold text-[var(--brand)] hover:bg-[var(--bg)] disabled:opacity-50"
+            >
+              {exporting === "l4-excel" ? "Excel…" : "Liste 4 Excel"}
+            </button>
+            <button
+              type="button"
+              disabled={exporting !== null || fourthCount === 0}
+              onClick={() => void doExport(4, "pdf")}
+              className="rounded-xl border border-[var(--accent)] bg-white px-4 py-2.5 text-sm font-semibold text-[var(--accent)] hover:bg-[var(--bg)] disabled:opacity-50"
+            >
+              {exporting === "l4-pdf" ? "PDF…" : "Liste 4 PDF"}
+            </button>
+            <button
+              type="button"
+              disabled={exporting !== null || fifthCount === 0}
+              onClick={() => void doExport(5, "excel")}
+              className="rounded-xl border border-[var(--brand)] bg-white px-4 py-2.5 text-sm font-semibold text-[var(--brand)] hover:bg-[var(--bg)] disabled:opacity-50"
+            >
+              {exporting === "l5-excel" ? "Excel…" : "Liste 5 Excel"}
+            </button>
+            <button
+              type="button"
+              disabled={exporting !== null || fifthCount === 0}
+              onClick={() => void doExport(5, "pdf")}
+              className="rounded-xl border border-[var(--accent)] bg-white px-4 py-2.5 text-sm font-semibold text-[var(--accent)] hover:bg-[var(--bg)] disabled:opacity-50"
+            >
+              {exporting === "l5-pdf" ? "PDF…" : "Liste 5 PDF"}
             </button>
             <button
               type="button"
@@ -699,12 +788,66 @@ export default function AdminFinalPage() {
                 Modifier liste 3
               </button>
             )}
+            {list4Unlocked ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setList4Unlocked(false);
+                  setUnlockOpen(null);
+                  setUnlockPassword("");
+                  setInfo("Liste 4 verrouillée.");
+                }}
+                className="rounded-xl border border-[var(--line)] bg-white px-4 py-2 text-sm font-semibold"
+              >
+                Verrouiller liste 4
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setUnlockOpen((v) => (v === "l4" ? null : "l4"));
+                  setUnlockPassword("");
+                  setError("");
+                }}
+                className="rounded-xl border border-[var(--line)] bg-white px-4 py-2 text-sm font-semibold"
+              >
+                Modifier liste 4
+              </button>
+            )}
+            {list5Unlocked ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setList5Unlocked(false);
+                  setUnlockOpen(null);
+                  setUnlockPassword("");
+                  setInfo("Liste 5 verrouillée.");
+                }}
+                className="rounded-xl border border-[var(--line)] bg-white px-4 py-2 text-sm font-semibold"
+              >
+                Verrouiller liste 5
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setUnlockOpen((v) => (v === "l5" ? null : "l5"));
+                  setUnlockPassword("");
+                  setError("");
+                }}
+                className="rounded-xl border border-[var(--line)] bg-white px-4 py-2 text-sm font-semibold"
+              >
+                Modifier liste 5
+              </button>
+            )}
           </div>
         </div>
         {unlockOpen &&
         ((unlockOpen === "l1" && !list1Unlocked) ||
           (unlockOpen === "l2" && !list2Unlocked) ||
-          (unlockOpen === "l3" && !list3Unlocked)) ? (
+          (unlockOpen === "l3" && !list3Unlocked) ||
+          (unlockOpen === "l4" && !list4Unlocked) ||
+          (unlockOpen === "l5" && !list5Unlocked)) ? (
           <div className="mb-4 flex flex-wrap items-end gap-2">
             <label className="text-sm font-medium">
               Mot de passe (
@@ -712,7 +855,11 @@ export default function AdminFinalPage() {
                 ? "Liste 1"
                 : unlockOpen === "l2"
                   ? "Liste 2"
-                  : "Liste 3"}
+                  : unlockOpen === "l3"
+                    ? "Liste 3"
+                    : unlockOpen === "l4"
+                      ? "Liste 4"
+                      : "Liste 5"}
               )
               <input
                 type="password"
@@ -749,7 +896,11 @@ export default function AdminFinalPage() {
                 <th className="py-2 pr-3 font-medium">Liste 2 (+)</th>
                 <th className="py-2 pr-3 font-medium">Seuil 2</th>
                 <th className="py-2 pr-3 font-medium">Liste 3 (+)</th>
-                <th className="py-2 font-medium">Seuil 3</th>
+                <th className="py-2 pr-3 font-medium">Seuil 3</th>
+                <th className="py-2 pr-3 font-medium">Liste 4 (+)</th>
+                <th className="py-2 pr-3 font-medium">Seuil 4</th>
+                <th className="py-2 pr-3 font-medium">Liste 5 (+)</th>
+                <th className="py-2 font-medium">Seuil 5</th>
               </tr>
             </thead>
             <tbody>
@@ -838,8 +989,52 @@ export default function AdminFinalPage() {
                         className="w-24 rounded-xl border border-[var(--line)] bg-white px-3 py-2 outline-none ring-[var(--brand)] focus:ring-2 disabled:cursor-not-allowed disabled:bg-[var(--bg)] disabled:text-[var(--muted)]"
                       />
                     </td>
-                    <td className="py-3 font-medium text-[var(--ink)]">
+                    <td className="py-3 pr-3 font-medium text-[var(--ink)]">
                       {seuil3ByCode[f.code]}
+                    </td>
+                    <td className="py-3 pr-3">
+                      <input
+                        type="number"
+                        min={0}
+                        step={1}
+                        inputMode="numeric"
+                        placeholder="ex. 10"
+                        value={fourth[f.code] || ""}
+                        disabled={!list4Unlocked}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          const code = f.code;
+                          startTransition(() => {
+                            setFourth((prev) => ({ ...prev, [code]: v }));
+                          });
+                        }}
+                        className="w-24 rounded-xl border border-[var(--line)] bg-white px-3 py-2 outline-none ring-[var(--brand)] focus:ring-2 disabled:cursor-not-allowed disabled:bg-[var(--bg)] disabled:text-[var(--muted)]"
+                      />
+                    </td>
+                    <td className="py-3 pr-3 font-medium text-[var(--ink)]">
+                      sous S3
+                    </td>
+                    <td className="py-3 pr-3">
+                      <input
+                        type="number"
+                        min={0}
+                        step={1}
+                        inputMode="numeric"
+                        placeholder="ex. 10"
+                        value={fifth[f.code] || ""}
+                        disabled={!list5Unlocked}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          const code = f.code;
+                          startTransition(() => {
+                            setFifth((prev) => ({ ...prev, [code]: v }));
+                          });
+                        }}
+                        className="w-24 rounded-xl border border-[var(--line)] bg-white px-3 py-2 outline-none ring-[var(--brand)] focus:ring-2 disabled:cursor-not-allowed disabled:bg-[var(--bg)] disabled:text-[var(--muted)]"
+                      />
+                    </td>
+                    <td className="py-3 font-medium text-[var(--ink)]">
+                      sous S4
                     </td>
                   </tr>
                 );

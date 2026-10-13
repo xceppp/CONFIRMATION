@@ -303,6 +303,10 @@ export type FinalRoundSpec = {
   list2: number;
   /** How many additional students to take for list 3 (after list 2). */
   list3: number;
+  /** How many additional students to take for list 4 (strictly under seuil 3). */
+  list4: number;
+  /** How many additional students to take for list 5 (strictly under seuil 4). */
+  list5: number;
 };
 
 /**
@@ -596,15 +600,15 @@ function rowCne(row: StudentRow): string {
  * List 2 = next students strictly below the liste-1 seuil, never anyone from list 1.
  * List 3 = next students strictly below the liste-2 cutoff, never L1/L2 CNEs.
  *   If places remain empty, fill from Liste-2 TO CONTACT (hors délai > seuil 1).
- * TO CONTACT: L2 Excel uses seuil 1; L3 Excel uses seuil 3 (last of list 3)
- *   when list3 places are set (else seuil 2), excluding L2-already-contacted.
- * Ties at each cutoff stay together (nobody cut mid-ex-aequo).
- * Hors délai above the contact seuil → `toContact` only (Excel), never PDF unless L3 fill.
+ * List 4 = next students strictly below published seuil 3, never L1/L2/L3 CNEs.
+ * List 5 = next students strictly below seuil 4 (last of list 4), never L1–L4 CNEs.
+ * Nobody strictly below 12 is admitted. Ties at a cutoff stay together.
+ * TO CONTACT: each later list only lists the new band above its own seuil.
  */
 export function selectFinalRound(
   rows: StudentRow[],
   specs: FinalRoundSpec[],
-  round: 1 | 2 | 3,
+  round: 1 | 2 | 3 | 4 | 5,
   options?: { list2ToContactCnes?: Set<string> },
 ): {
   selected: { code: string; name: string; places: number; rows: StudentRow[] }[];
@@ -618,9 +622,13 @@ export function selectFinalRound(
     list1: number;
     list2: number;
     list3: number;
+    list4: number;
+    list5: number;
     seuil: string;
     seuilList2: string;
     seuilList3: string;
+    seuilList4: string;
+    seuilList5: string;
   }[];
   toContact: { code: string; name: string; rows: StudentRow[] }[];
 } {
@@ -640,9 +648,13 @@ export function selectFinalRound(
     list1: number;
     list2: number;
     list3: number;
+    list4: number;
+    list5: number;
     seuil: string;
     seuilList2: string;
     seuilList3: string;
+    seuilList4: string;
+    seuilList5: string;
   }[] = [];
   const toContact: { code: string; name: string; rows: StudentRow[] }[] = [];
   const list2ToContactCnes = options?.list2ToContactCnes;
@@ -671,10 +683,24 @@ export function selectFinalRound(
     const list1 = Math.max(0, Math.floor(f.list1));
     const list2 = Math.max(0, Math.floor(f.list2 ?? 0));
     const list3 = Math.max(0, Math.floor(f.list3 ?? 0));
-    const want = round === 1 ? list1 : round === 2 ? list2 : list3;
+    const list4 = Math.max(0, Math.floor(f.list4 ?? 0));
+    const list5 = Math.max(0, Math.floor(f.list5 ?? 0));
+    const want =
+      round === 1
+        ? list1
+        : round === 2
+          ? list2
+          : round === 3
+            ? list3
+            : round === 4
+              ? list4
+              : list5;
     if (want <= 0) continue;
     if (round === 2 && list1 <= 0) continue;
     if (round === 3 && (list1 <= 0 || list2 <= 0)) continue;
+    if (round === 4 && (list1 <= 0 || list2 <= 0 || list3 <= 0)) continue;
+    if (round === 5 && (list1 <= 0 || list2 <= 0 || list3 <= 0 || list4 <= 0))
+      continue;
 
     // Admis-pool contact exclusion stays on seuil 1 (L2) / seuil 2 (L3 picks).
     // Seuil 3 is for TO CONTACT exports after Liste 3 — not for cutting L3 admis.
@@ -736,6 +762,8 @@ export function selectFinalRound(
     }
 
     let picked: StudentRow[];
+    let seuilList4 = "";
+    let seuilList5 = "";
     if (round === 1) {
       // Drop anyone below the absolute floor (ties cannot pull in < 12).
       picked = first.filter(eligibleAdmis);
@@ -746,7 +774,7 @@ export function selectFinalRound(
         if (cne && l1ContactCnes.has(cne)) return false;
         return eligibleAdmis(row);
       });
-    } else {
+    } else if (round === 3) {
       // 1) Normal L3: respecting seuil 2 / after L2 cutoff — PDF + list.
       const afterL2 = afterL1.filter((row) => {
         const cne = rowCne(row);
@@ -779,15 +807,65 @@ export function selectFinalRound(
           );
         picked = [...picked, ...takeWithTies(fillers, need)];
       }
+    } else {
+      // L4 / L5: never reprint L1–L3, never go back above published seuil 3,
+      // never admit below 12, never fill from people already contacted.
+      const afterL2 = afterL1.filter((row) => {
+        const cne = rowCne(row);
+        if (cne && secondCnes.has(cne)) return false;
+        if (cne && toContactCnes.has(cne)) return false;
+        if (lastSecond == null && !Number.isFinite(published2)) return true;
+        return parseScore(row) < seuil2Num - 1e-6;
+      });
+      const third = takeWithTies(afterL2, list3);
+      const thirdCnes = new Set(third.map(rowCne).filter(Boolean));
+      const published3 = PUBLISHED_LIST3_SEUIL[f.code];
+      const seuil3Cut = Number.isFinite(published3)
+        ? published3
+        : third.length
+          ? parseScore(third[third.length - 1])
+          : Number.POSITIVE_INFINITY;
+      const afterL3 = afterL2.filter((row) => {
+        const cne = rowCne(row);
+        if (cne && thirdCnes.has(cne)) return false;
+        if (cne && firstCnes.has(cne)) return false;
+        return parseScore(row) < seuil3Cut - 1e-6;
+      });
+      const fourth = takeWithTies(afterL3, list4);
+      const lastFourth = fourth[fourth.length - 1];
+      seuilList4 =
+        lastFourth != null ? cellValue(lastFourth, "Score") : "";
+      if (round === 4) {
+        picked = fourth;
+      } else {
+        const fourthCnes = new Set(fourth.map(rowCne).filter(Boolean));
+        const seuil4Cut =
+          lastFourth != null ? parseScore(lastFourth) : Number.NEGATIVE_INFINITY;
+        const afterL4 = afterL3.filter((row) => {
+          const cne = rowCne(row);
+          if (cne && fourthCnes.has(cne)) return false;
+          if (lastFourth == null) return false;
+          return parseScore(row) < seuil4Cut - 1e-6;
+        });
+        picked = takeWithTies(afterL4, list5);
+        const lastFifth = picked[picked.length - 1];
+        seuilList5 =
+          lastFifth != null ? cellValue(lastFifth, "Score") : "";
+      }
     }
 
     const lastThird = picked.length && round === 3 ? picked[picked.length - 1] : null;
     const published3 = PUBLISHED_LIST3_SEUIL[f.code];
     let seuilList3 = "";
-    if (round >= 3 && list3 > 0) {
+    if (list3 > 0) {
       if (Number.isFinite(published3)) seuilList3 = String(published3);
       else if (lastThird) seuilList3 = cellValue(lastThird, "Score");
       else seuilList3 = built.seuilList3 || "";
+    }
+    if (round === 4) {
+      const lastFourth = picked[picked.length - 1];
+      seuilList4 =
+        lastFourth != null ? cellValue(lastFourth, "Score") : seuilList4;
     }
 
     selected.push({
@@ -806,9 +884,13 @@ export function selectFinalRound(
       list1,
       list2,
       list3,
+      list4,
+      list5,
       seuil,
       seuilList2,
       seuilList3,
+      seuilList4,
+      seuilList5,
     });
     if (built.toContact.length > 0) {
       toContact.push({
