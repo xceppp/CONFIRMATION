@@ -9,12 +9,9 @@ import {
 import {
   buildFinalPoolForFiliere,
   cellValue,
-  isHorsDelai,
-  rowMatchesFiliere,
   selectFinalRound,
 } from "@/lib/confirmations-export";
 import { buildFinalSelectionPdf } from "@/lib/confirmations-pdf";
-import type { StudentRow } from "@/lib/columns";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -106,12 +103,6 @@ async function buildExcel(
     seuilList5?: string;
   }[],
   round: 1 | 2 | 3 | 4 | 5,
-  toContact: {
-    code: string;
-    name: string;
-    rows: StudentRow[];
-    seuil?: string;
-  }[],
 ): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Confirmation";
@@ -253,14 +244,6 @@ async function buildExcel(
           : [s.code, s.name, s.places, s.confirmed, s.selected, s.shortfall],
     );
   }
-  if (round >= 2) {
-    const nContact = toContact.reduce((acc, g) => acc + g.rows.length, 0);
-    resume.addRow([]);
-    resume.addRow([
-      "TO CONTACT hors délai",
-      `${nContact} étudiant(s) — feuille « TO CONTACT hors delai »`,
-    ]);
-  }
   resume.columns.forEach((col) => {
     col.width = 18;
   });
@@ -321,75 +304,6 @@ async function buildExcel(
       });
       col.width = max;
     });
-  }
-
-  const contactRows = toContact.flatMap((g) => g.rows);
-  // Liste 2 / 3 Excel: always include TO CONTACT hors délai sheet.
-  if (round >= 2 || contactRows.length > 0) {
-    const contact = workbook.addWorksheet("TO CONTACT hors delai", {
-      views: [{ state: "frozen", ySplit: 1 }],
-    });
-    contact.addRow([
-      "CNE / Code Massar",
-      "Nom complet",
-      "Filière",
-      "Score",
-      round >= 5
-        ? "Seuil liste 5"
-        : round >= 4
-          ? "Seuil liste 4"
-          : round >= 3
-            ? "Seuil liste 3"
-            : "Seuil liste 1",
-      "Téléphone",
-      "Agent",
-      "Date confirmation",
-    ]);
-    contact.getRow(1).font = { bold: true };
-    if (contactRows.length === 0) {
-      contact.addRow([
-        "—",
-        round >= 3
-          ? "Aucun nouveau hors délai à contacter (L2 déjà contactés exclus)"
-          : "Aucun hors délai au-dessus du seuil",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-      ]);
-    } else {
-      for (const group of toContact) {
-        const rowSummary = summary.find((s) => s.code === group.code);
-        const seuil =
-          group.seuil ||
-          (round >= 5
-            ? rowSummary?.seuilList5
-            : round >= 4
-              ? rowSummary?.seuilList4
-              : round >= 3
-                ? rowSummary?.seuilList3
-                : rowSummary?.seuil) ||
-          "";
-        for (const row of group.rows) {
-          contact.addRow([
-            cellValue(row, "CNE"),
-            cellValue(row, "NomComplet"),
-            cellValue(row, "Filiere") || group.name,
-            cellValue(row, "Score"),
-            seuil,
-            cellValue(row, "Telephone"),
-            cellValue(row, "Agent"),
-            cellValue(row, "DateConfirmation"),
-          ]);
-        }
-      }
-    }
-    contact.columns.forEach((col) => {
-      col.width = 18;
-    });
-    contact.getColumn(2).width = 32;
   }
 
   return Buffer.from(await workbook.xlsx.writeBuffer());
@@ -497,7 +411,7 @@ export async function POST(request: Request) {
         ? await getListe2ToContactLockedCnes()
         : { cnes: new Set<string>(), lockedCount: 0, lockedAt: "" };
 
-    const { selected, summary, toContact } = selectFinalRound(
+    const { selected, summary } = selectFinalRound(
       rows,
       active,
       round,
@@ -506,104 +420,15 @@ export async function POST(request: Request) {
         : undefined,
     );
 
-    // Liste 2/3 Excel: collect ALL hors-délai TO CONTACT for every filière
-    // with a liste-1 count (not only filières that have list2/list3 places).
-    let contactForExcel: {
-      code: string;
-      name: string;
-      rows: StudentRow[];
-      seuil: string;
-    }[] = [];
-    if (round >= 2) {
-      const byCode = new Map<
-        string,
-        { code: string; name: string; rows: StudentRow[]; seuil: string }
-      >();
-      for (const f of specs) {
-        if (f.list1 <= 0) continue;
-        // Liste 2 Excel: TO CONTACT vs seuil 1.
-        // Liste 3 Excel: TO CONTACT vs seuil 3 (last of list 3).
-        const built = buildFinalPoolForFiliere(
-          rows,
-          f.code,
-          f.name,
-          f.list1,
-          round >= 3 ? f.list2 : 0,
-          round >= 3 ? f.list3 : 0,
-        );
-        if (round < 4 && built.toContact.length === 0) continue;
-        // L3 TO CONTACT = NEW only. Never re-list people already contacted on L2:
-        // 1) locked L2 TO CONTACT CNEs (from L2 Excel export)
-        // 2) hors-délai above seuil 1 (classic L2 à-contacter band), even if lock empty
-        let rowsContact = built.toContact;
-        if (round === 3) {
-          const l1Band = buildFinalPoolForFiliere(
-            rows,
-            f.code,
-            f.name,
-            f.list1,
-          );
-          const alreadyL2Contact = new Set(
-            l1Band.toContact.map((row) =>
-              String(row.CNE || row.Code || "")
-                .trim()
-                .toUpperCase(),
-            ),
-          );
-          for (const cne of list2ContactLock.cnes) alreadyL2Contact.add(cne);
-          rowsContact = built.toContact.filter((row) => {
-            const cne = String(row.CNE || row.Code || "")
-              .trim()
-              .toUpperCase();
-            return cne && !alreadyL2Contact.has(cne);
-          });
-        }
-        if (round === 4 || round === 5) {
-          const info = summary.find((s) => s.code === f.code);
-          const floor = Number.parseFloat(
-            String(round === 5 ? info?.seuilList5 : info?.seuilList4 || ""),
-          );
-          const ceiling = Number.parseFloat(
-            String(round === 5 ? info?.seuilList4 : info?.seuilList3 || ""),
-          );
-          if (!Number.isFinite(floor) || !Number.isFinite(ceiling)) continue;
-          rowsContact = rows.filter((row) => {
-            if (!isHorsDelai(row)) return false;
-            if (!rowMatchesFiliere(row, f.code, f.name)) return false;
-            const score = Number.parseFloat(
-              String(row.Score || "").replace(",", "."),
-            );
-            if (!Number.isFinite(score)) return false;
-            // New band only: above this list's seuil, at or under the previous seuil.
-            return score > floor + 1e-6 && score <= ceiling + 1e-6;
-          });
-        }
-        if (rowsContact.length === 0) continue;
-        const info = summary.find((s) => s.code === f.code);
-        const seuilLabel =
-          round >= 5
-            ? info?.seuilList5
-            : round >= 4
-              ? info?.seuilList4
-              : built.contactSeuil || built.seuil;
-        byCode.set(f.code, {
-          code: f.code,
-          name: f.name,
-          rows: rowsContact,
-          seuil: seuilLabel || "",
-        });
-      }
-      contactForExcel = [...byCode.values()];
-    } else {
-      contactForExcel = toContact.map((g) => ({
-        ...g,
-        seuil: summary.find((s) => s.code === g.code)?.seuil || "",
-      }));
-    }
-
-    // Freeze Liste 2 TO CONTACT on Excel export so Liste 3 can fill / exclude them.
-    if (round === 2 && format === "excel" && contactForExcel.length > 0) {
-      await lockListe2ToContact(contactForExcel.flatMap((g) => g.rows));
+    // Keep the Liste 2 contact lock (used to exclude already-called students
+    // from later lists). Those names are not written into the Excel file.
+    if (round === 2 && format === "excel") {
+      const lockedRows = specs.flatMap((f) => {
+        if (f.list1 <= 0) return [];
+        return buildFinalPoolForFiliere(rows, f.code, f.name, f.list1)
+          .toContact;
+      });
+      if (lockedRows.length > 0) await lockListe2ToContact(lockedRows);
     }
 
     const stamp = new Date().toISOString().slice(0, 10);
@@ -665,12 +490,7 @@ export async function POST(request: Request) {
       });
     }
 
-    const buffer = await buildExcel(
-      selected,
-      summary,
-      round,
-      contactForExcel,
-    );
+    const buffer = await buildExcel(selected, summary, round);
     return new NextResponse(new Uint8Array(buffer), {
       status: 200,
       headers: {

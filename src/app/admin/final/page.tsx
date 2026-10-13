@@ -385,11 +385,11 @@ export default function AdminFinalPage() {
             : round === 3
           ? format === "pdf"
             ? "PDF liste 3 : admis (seuil) + places restantes remplies depuis TO CONTACT liste 2."
-            : "Excel liste 3 : admis (score ≥ 11,90) + Seuil 3 + TO CONTACT = nouveaux > seuil 3 (L2 déjà contactés exclus)."
+            : "Excel liste 3 téléchargé — admis seulement, sans feuille à contacter."
           : round === 2
             ? format === "pdf"
               ? "PDF liste 2 téléchargé — étudiants juste après le seuil de la liste 1."
-              : "Excel liste 2 : admis + TO CONTACT hors delai (mémorisé pour la liste 3)."
+              : "Excel liste 2 téléchargé — admis seulement, sans feuille à contacter."
             : format === "pdf"
               ? "PDF liste 1 téléchargé — top scores selon les places."
               : "Excel liste 1 téléchargé — top scores selon les places.",
@@ -545,8 +545,7 @@ export default function AdminFinalPage() {
             précédent. Liste 4 sous le seuil 3 publié, Liste 5 sous le seuil 4
             (dernier admis de la liste 4). Plancher : dernier admis ≥ 11,90.
             Places en trop restent vides. Aucun doublon
-            entre les listes. TO CONTACT d&apos;une liste = seulement la nouvelle
-            tranche, pas les gens déjà contactés.
+            entre les listes. L&apos;Excel ne contient que les admis.
           </p>
         </div>
         <div className="flex flex-col items-end gap-2">
