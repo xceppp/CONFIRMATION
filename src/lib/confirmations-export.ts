@@ -361,10 +361,11 @@ export const PUBLISHED_LIST3_SEUIL: Record<string, number> = {
 };
 
 /**
- * Absolute floor for any admitted list (L1 / L2 / L3).
- * Nobody strictly below 12 is published — empty places stay empty.
+ * Absolute floor for any admitted list.
+ * Last student kept must be at least 11.90. Anyone strictly below stays off
+ * the list, and leftover places stay empty.
  */
-export const MIN_ADMIS_SCORE = 12;
+export const MIN_ADMIS_SCORE = 11.9;
 
 /** Late manual confirmation flag. */
 export function isHorsDelai(row: { HorsDelai?: string }): boolean {
@@ -602,7 +603,8 @@ function rowCne(row: StudentRow): string {
  *   If places remain empty, fill from Liste-2 TO CONTACT (hors délai > seuil 1).
  * List 4 = next students strictly below published seuil 3, never L1/L2/L3 CNEs.
  * List 5 = next students strictly below seuil 4 (last of list 4), never L1–L4 CNEs.
- * Nobody strictly below 12 is admitted. Ties at a cutoff stay together.
+ * Nobody strictly below 11.90 is admitted. Ties at a cutoff stay together.
+ * If fewer students reach 11.90 than the places asked, only those students are kept.
  * TO CONTACT: each later list only lists the new band above its own seuil.
  */
 export function selectFinalRound(
@@ -765,7 +767,7 @@ export function selectFinalRound(
     let seuilList4 = "";
     let seuilList5 = "";
     if (round === 1) {
-      // Drop anyone below the absolute floor (ties cannot pull in < 12).
+      // Drop anyone below 11.90 (ties cannot pull in a lower score).
       picked = first.filter(eligibleAdmis);
     } else if (round === 2) {
       // Never admit TO CONTACT (hors délai > seuil 1) on liste 2.
@@ -809,7 +811,7 @@ export function selectFinalRound(
       }
     } else {
       // L4 / L5: never reprint L1–L3, never go back above published seuil 3,
-      // never admit below 12, never fill from people already contacted.
+      // never admit below 11.90, never fill from people already contacted.
       const afterL2 = afterL1.filter((row) => {
         const cne = rowCne(row);
         if (cne && secondCnes.has(cne)) return false;

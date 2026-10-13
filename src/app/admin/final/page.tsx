@@ -379,13 +379,13 @@ export default function AdminFinalPage() {
       URL.revokeObjectURL(url);
       setInfo(
         round === 5
-          ? "Liste 5 : suivants strictement sous le seuil 4, score ≥ 12, sans doublon L1–L4."
+          ? "Liste 5 : suivants strictement sous le seuil 4, score ≥ 11,90, sans doublon L1–L4."
           : round === 4
-            ? "Liste 4 : suivants strictement sous le seuil 3, score ≥ 12, sans doublon L1–L3."
+            ? "Liste 4 : suivants strictement sous le seuil 3, score ≥ 11,90, sans doublon L1–L3."
             : round === 3
           ? format === "pdf"
             ? "PDF liste 3 : admis (seuil) + places restantes remplies depuis TO CONTACT liste 2."
-            : "Excel liste 3 : admis (score ≥ 12) + Seuil 3 + TO CONTACT = nouveaux > seuil 3 (L2 déjà contactés exclus)."
+            : "Excel liste 3 : admis (score ≥ 11,90) + Seuil 3 + TO CONTACT = nouveaux > seuil 3 (L2 déjà contactés exclus)."
           : round === 2
             ? format === "pdf"
               ? "PDF liste 2 téléchargé — étudiants juste après le seuil de la liste 1."
@@ -543,7 +543,8 @@ export default function AdminFinalPage() {
           <p className="mt-1 max-w-2xl text-[var(--muted)]">
             Liste 1 à 3 : chaque liste continue strictement sous le seuil
             précédent. Liste 4 sous le seuil 3 publié, Liste 5 sous le seuil 4
-            (dernier admis de la liste 4). Plancher : score ≥ 12. Aucun doublon
+            (dernier admis de la liste 4). Plancher : dernier admis ≥ 11,90.
+            Places en trop restent vides. Aucun doublon
             entre les listes. TO CONTACT d&apos;une liste = seulement la nouvelle
             tranche, pas les gens déjà contactés.
           </p>
