@@ -35,3 +35,14 @@ body {
 * {
   box-sizing: border-box;
 }
+
+.admin-shell button:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.admin-shell button {
+  transition:
+    transform 0.08s ease,
+    background-color 0.15s ease,
+    opacity 0.15s ease;
+}

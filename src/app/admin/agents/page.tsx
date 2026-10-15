@@ -1,39 +1,55 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import {
+  ADMIN_AGENTS,
+  loadAdmin,
+  readAdminCache,
+} from "@/lib/admin-view-cache";
 
 type AgentInfo = { Nom: string; MotDePasse: string; hasPassword: boolean };
 
+function cachedAgents(): AgentInfo[] {
+  return (
+    readAdminCache<{ agents?: AgentInfo[] }>(ADMIN_AGENTS.key)?.agents || []
+  );
+}
+
 export default function AdminAgentsPage() {
-  const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [agents, setAgents] = useState<AgentInfo[]>(cachedAgents);
   const [agentName, setAgentName] = useState("");
   const [agentPassword, setAgentPassword] = useState("");
   const [savingAgent, setSavingAgent] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(
+    () => readAdminCache(ADMIN_AGENTS.key) == null,
+  );
 
   const [editing, setEditing] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editPassword, setEditPassword] = useState("");
   const [busyName, setBusyName] = useState<string | null>(null);
 
-  async function loadAgents() {
-    setLoading(true);
+  async function loadAgents(fresh = false) {
+    if (readAdminCache(ADMIN_AGENTS.key) == null) setLoading(true);
     try {
-      const res = await fetch("/api/admin/agents");
-      const data = await res.json();
-      if (res.ok) setAgents(data.agents || []);
-      else setError(data.error || "Impossible de charger les agents");
-    } catch {
-      setError("Erreur réseau.");
+      const data = await loadAdmin<{ agents?: AgentInfo[] }>(
+        ADMIN_AGENTS.key,
+        ADMIN_AGENTS.url,
+        { fresh },
+      );
+      setAgents(data.agents || []);
+      setError("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erreur réseau.");
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    loadAgents();
+    void loadAgents(false);
   }, []);
 
   function clearAlerts() {
@@ -62,7 +78,7 @@ export default function AdminAgentsPage() {
       setMessage(data.message || "Agent ajouté.");
       setAgentName("");
       setAgentPassword("");
-      await loadAgents();
+      await loadAgents(true);
     } catch {
       setError("Erreur réseau.");
     } finally {
@@ -103,7 +119,7 @@ export default function AdminAgentsPage() {
       }
       setMessage(data.message || "Agent mis à jour.");
       cancelEdit();
-      await loadAgents();
+      await loadAgents(true);
     } catch {
       setError("Erreur réseau.");
     } finally {
@@ -134,7 +150,7 @@ export default function AdminAgentsPage() {
       }
       setMessage(data.message || "Agent supprimé.");
       if (editing === name) cancelEdit();
-      await loadAgents();
+      await loadAgents(true);
     } catch {
       setError("Erreur réseau.");
     } finally {

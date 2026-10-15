@@ -1,6 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import {
+  ADMIN_CONFIRMATIONS,
+  loadAdmin,
+  readAdminCache,
+} from "@/lib/admin-view-cache";
 
 type Row = Record<string, string>;
 
@@ -12,31 +17,42 @@ function parseScore(r: Row): number {
   return Number.isFinite(n) ? n : NaN;
 }
 
+function cachedRows(): Row[] {
+  return (
+    readAdminCache<{ rows?: Row[] }>(ADMIN_CONFIRMATIONS.key)?.rows || []
+  );
+}
+
 export default function AdminTablePage() {
-  const [rows, setRows] = useState<Row[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [rows, setRows] = useState<Row[]>(cachedRows);
+  const [loading, setLoading] = useState(
+    () => readAdminCache(ADMIN_CONFIRMATIONS.key) == null,
+  );
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
 
-  async function load() {
-    setLoading(true);
+  async function load(fresh = false) {
+    const hadCache = readAdminCache(ADMIN_CONFIRMATIONS.key) != null;
+    if (!hadCache) setLoading(true);
+    setRefreshing(true);
     setError("");
     try {
-      const res = await fetch("/api/admin/confirmations");
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || "Impossible de charger");
-        return;
-      }
+      const data = await loadAdmin<{ rows?: Row[] }>(
+        ADMIN_CONFIRMATIONS.key,
+        ADMIN_CONFIRMATIONS.url,
+        { fresh },
+      );
       setRows(data.rows || []);
-    } catch {
-      setError("Erreur réseau.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erreur réseau.");
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }
 
   useEffect(() => {
-    load();
+    void load(false);
   }, []);
 
   const stats = useMemo(() => {
@@ -96,14 +112,15 @@ export default function AdminTablePage() {
           <p className="mt-1 text-[var(--muted)]">
             Statistiques des confirmations
             {loading ? "" : ` — ${stats.total} au total`}
+            {refreshing && !loading ? " — mise à jour…" : ""}
           </p>
         </div>
         <button
           type="button"
-          onClick={load}
+          onClick={() => void load(true)}
           className="rounded-xl border border-[var(--line)] bg-white px-3 py-2 text-sm font-semibold hover:bg-[var(--bg)]"
         >
-          Actualiser
+          {refreshing ? "Actualisation…" : "Actualiser"}
         </button>
       </div>
 

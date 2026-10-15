@@ -5,6 +5,13 @@ import {
   DEFAULT_EXPORT_KEYS,
   EXPORT_COLUMNS,
 } from "@/lib/confirmations-export";
+import {
+  ADMIN_CONFIRMATIONS,
+  ADMIN_COUNTS,
+  invalidateAdminCache,
+  loadAdmin,
+  readAdminCache,
+} from "@/lib/admin-view-cache";
 
 type Row = Record<string, string>;
 type Group = { filiere: string; count: number; rows: Row[] };
@@ -49,9 +56,14 @@ function sortRows(rows: Row[], key: SortKey, dir: "asc" | "desc"): Row[] {
   });
 }
 
+function cachedGroups(): Group[] {
+  return readAdminCache<{ groups?: Group[] }>(ADMIN_CONFIRMATIONS.key)?.groups || [];
+}
+
 export default function AdminConfirmationsPage() {
-  const [groups, setGroups] = useState<Group[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [groups, setGroups] = useState<Group[]>(cachedGroups);
+  const [loading, setLoading] = useState(() => cachedGroups().length === 0 && !readAdminCache(ADMIN_CONFIRMATIONS.key));
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [filiereFilter, setFiliereFilter] = useState("all");
   const [search, setSearch] = useState("");
@@ -67,26 +79,28 @@ export default function AdminConfirmationsPage() {
   const [clearOpen, setClearOpen] = useState(false);
   const [clearPassword, setClearPassword] = useState("");
 
-  async function load() {
-    setLoading(true);
+  async function load(fresh = false) {
+    const hadCache = readAdminCache(ADMIN_CONFIRMATIONS.key) != null;
+    if (!hadCache) setLoading(true);
+    setRefreshing(true);
     setError("");
     try {
-      const res = await fetch("/api/admin/confirmations");
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || "Impossible de charger");
-        return;
-      }
+      const data = await loadAdmin<{ groups?: Group[] }>(
+        ADMIN_CONFIRMATIONS.key,
+        ADMIN_CONFIRMATIONS.url,
+        { fresh },
+      );
       setGroups(data.groups || []);
-    } catch {
-      setError("Erreur réseau.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erreur réseau.");
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }
 
   useEffect(() => {
-    load();
+    void load(false);
   }, []);
 
   const allRows = useMemo(
@@ -307,7 +321,9 @@ export default function AdminConfirmationsPage() {
       setGroups([]);
       setClearOpen(false);
       setClearPassword("");
-      await load();
+      invalidateAdminCache(ADMIN_CONFIRMATIONS.key);
+      invalidateAdminCache(ADMIN_COUNTS.key);
+      await load(true);
     } catch {
       setError("Erreur réseau pendant l'effacement.");
     } finally {
@@ -328,6 +344,7 @@ export default function AdminConfirmationsPage() {
           <p className="mt-1 text-[var(--muted)]">
             Cliquez une colonne pour trier.
             {loading ? "" : ` — ${total} affiché${total > 1 ? "s" : ""}`}
+            {refreshing && !loading ? " — mise à jour…" : ""}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -443,10 +460,10 @@ export default function AdminConfirmationsPage() {
         </label>
         <button
           type="button"
-          onClick={load}
+          onClick={() => void load(true)}
           className="rounded-xl border border-[var(--line)] bg-white px-3 py-2 text-sm font-semibold hover:bg-[var(--bg)]"
         >
-          Actualiser
+          {refreshing ? "Actualisation…" : "Actualiser"}
         </button>
       </div>
 

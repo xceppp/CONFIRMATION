@@ -14,9 +14,11 @@ export default function AdminLayout({
   }
 
   return (
-    <main className="mx-auto min-h-screen w-full max-w-7xl px-4 py-8">
+    <div className="admin-shell flex min-h-screen">
       <AdminNav />
-      {children}
-    </main>
+      <main className="min-w-0 flex-1 px-4 pt-16 pb-8 md:px-8 md:pt-8">
+        {children}
+      </main>
+    </div>
   );
 }

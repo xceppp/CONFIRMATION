@@ -7,6 +7,13 @@ import {
   PUBLISHED_LIST3_SEUIL,
 } from "@/lib/confirmations-export";
 import { FILIERES, resolveFiliereFromLabel } from "@/lib/filieres";
+import {
+  ADMIN_COUNTS,
+  ADMIN_HORS,
+  loadAdmin,
+  readAdminCache,
+  writeAdminCache,
+} from "@/lib/admin-view-cache";
 
 type ConfCounts = Record<string, number>;
 
@@ -59,6 +66,25 @@ function loadSavedMap(
   return next;
 }
 
+type CountsPayload = {
+  groups?: { filiere?: string; count?: number }[];
+  horsCount?: number;
+};
+
+type HorsPayload = { lockedCount?: number; lockedAt?: string };
+
+function countsFromPayload(data: CountsPayload | null): ConfCounts {
+  const counts: ConfCounts = {};
+  for (const f of FILIERES) counts[f.code] = 0;
+  for (const g of data?.groups || []) {
+    const match = resolveFiliereFromLabel(String(g.filiere || ""));
+    if (match) {
+      counts[match.code] = (counts[match.code] || 0) + Number(g.count || 0);
+    }
+  }
+  return counts;
+}
+
 function emptyExtra(): Record<string, string> {
   const init: Record<string, string> = {};
   for (const f of FILIERES) init[f.code] = "";
@@ -72,9 +98,16 @@ export default function AdminFinalPage() {
   const [fourth, setFourth] = useState<Record<string, string>>(emptyExtra);
   const [fifth, setFifth] = useState<Record<string, string>>(emptyExtra);
   const [placesHydrated, setPlacesHydrated] = useState(false);
-  const [confirmedByCode, setConfirmedByCode] = useState<ConfCounts>({});
-  const [horsCount, setHorsCount] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [confirmedByCode, setConfirmedByCode] = useState<ConfCounts>(() =>
+    countsFromPayload(readAdminCache<CountsPayload>(ADMIN_COUNTS.key)),
+  );
+  const [horsCount, setHorsCount] = useState(
+    () => Number(readAdminCache<CountsPayload>(ADMIN_COUNTS.key)?.horsCount || 0),
+  );
+  const [loading, setLoading] = useState(
+    () => readAdminCache(ADMIN_COUNTS.key) == null,
+  );
+  const [refreshing, setRefreshing] = useState(false);
   const [exporting, setExporting] = useState<
     | "l1-excel"
     | "l1-pdf"
@@ -101,50 +134,51 @@ export default function AdminFinalPage() {
     "l1" | "l2" | "l3" | "l4" | "l5" | null
   >(null);
   const [unlockPassword, setUnlockPassword] = useState("");
-  const [horsLockedCount, setHorsLockedCount] = useState(0);
-  const [horsLockedAt, setHorsLockedAt] = useState("");
+  const [horsLockedCount, setHorsLockedCount] = useState(
+    () => Number(readAdminCache<HorsPayload>(ADMIN_HORS.key)?.lockedCount || 0),
+  );
+  const [horsLockedAt, setHorsLockedAt] = useState(
+    () => String(readAdminCache<HorsPayload>(ADMIN_HORS.key)?.lockedAt || ""),
+  );
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
 
-  async function loadHorsLockStatus() {
+  async function loadHorsLockStatus(fresh = false) {
     try {
-      const res = await fetch("/api/admin/final/hors-delai");
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) return;
+      const data = await loadAdmin<HorsPayload>(
+        ADMIN_HORS.key,
+        ADMIN_HORS.url,
+        { fresh },
+      );
       setHorsLockedCount(Number(data.lockedCount || 0));
       setHorsLockedAt(String(data.lockedAt || ""));
     } catch {
-      /* ignore */
+      /* ignore — same as before when the lock status cannot be read */
     }
   }
 
-  async function loadCounts() {
-    setLoading(true);
+  async function loadCounts(fresh = false) {
+    if (readAdminCache(ADMIN_COUNTS.key) == null) setLoading(true);
+    setRefreshing(true);
     setError("");
     try {
-      // Light payload: counts only — keeps Final admin instant.
-      const res = await fetch("/api/admin/confirmations?countsOnly=1");
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || "Impossible de charger les confirmations");
-        return;
-      }
-      const counts: ConfCounts = {};
-      for (const f of FILIERES) counts[f.code] = 0;
-      for (const g of data.groups || []) {
-        const match = resolveFiliereFromLabel(String(g.filiere || ""));
-        if (match) {
-          counts[match.code] =
-            (counts[match.code] || 0) + Number(g.count || 0);
-        }
-      }
-      setConfirmedByCode(counts);
+      const countsPromise = loadAdmin<CountsPayload>(
+        ADMIN_COUNTS.key,
+        ADMIN_COUNTS.url,
+        { fresh },
+      );
+      const horsPromise = loadHorsLockStatus(fresh);
+      const data = await countsPromise;
+      setConfirmedByCode(countsFromPayload(data));
       setHorsCount(Number(data.horsCount || 0));
-      await loadHorsLockStatus();
-    } catch {
-      setError("Erreur réseau.");
+      await horsPromise;
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Erreur réseau.",
+      );
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }
 
@@ -155,7 +189,7 @@ export default function AdminFinalPage() {
     setFourth(loadSavedMap(FOURTH_STORAGE_KEY, emptyExtra()));
     setFifth(loadSavedMap(FIFTH_STORAGE_KEY, emptyExtra()));
     setPlacesHydrated(true);
-    void loadCounts();
+    void loadCounts(false);
   }, []);
 
   // Debounce localStorage writes so typing stays smooth.
@@ -416,8 +450,11 @@ export default function AdminFinalPage() {
         setError(data.error || "Verrouillage impossible");
         return;
       }
-      setHorsLockedCount(Number(data.lockedCount || 0));
-      setHorsLockedAt(String(data.lockedAt || ""));
+      const lockedCount = Number(data.lockedCount || 0);
+      const lockedAt = String(data.lockedAt || "");
+      setHorsLockedCount(lockedCount);
+      setHorsLockedAt(lockedAt);
+      writeAdminCache(ADMIN_HORS.key, { lockedCount, lockedAt });
       setInfo(
         data.message ||
           `1ère sélection hors délai verrouillée (${data.lockedCount}).`,
@@ -446,6 +483,7 @@ export default function AdminFinalPage() {
       }
       setHorsLockedCount(0);
       setHorsLockedAt("");
+      writeAdminCache(ADMIN_HORS.key, { lockedCount: 0, lockedAt: "" });
       setInfo(data.message || "Verrouillage hors délai effacé.");
     } catch {
       setError("Erreur réseau.");
@@ -552,10 +590,10 @@ export default function AdminFinalPage() {
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={() => void loadCounts()}
+              onClick={() => void loadCounts(true)}
               className="rounded-xl border border-[var(--line)] bg-white px-4 py-2.5 text-sm font-semibold hover:bg-[var(--bg)]"
             >
-              Actualiser
+              {refreshing ? "Actualisation…" : "Actualiser"}
             </button>
             <button
               type="button"

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { ADMIN_STATS, loadAdmin, readAdminCache } from "@/lib/admin-view-cache";
 
 type Stats = {
   etudiants: number;
@@ -10,28 +11,47 @@ type Stats = {
   filiereSheets?: string[];
 };
 
+function statsFrom(data: { stats?: Stats } | null): Stats | null {
+  return data?.stats ?? null;
+}
+
 export default function AdminHomePage() {
-  const [stats, setStats] = useState<Stats | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState<Stats | null>(() =>
+    statsFrom(readAdminCache(ADMIN_STATS.key)),
+  );
+  const [loading, setLoading] = useState(
+    () => statsFrom(readAdminCache(ADMIN_STATS.key)) === null,
+  );
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
     void fetch("/api/warm", { method: "POST" });
+    let cancelled = false;
     (async () => {
+      if (!readAdminCache(ADMIN_STATS.key)) setLoading(true);
+      setRefreshing(true);
       try {
-        const res = await fetch("/api/admin/stats");
-        const data = await res.json();
-        if (!res.ok) {
-          setError(data.error || "Impossible de charger les stats");
-          return;
-        }
-        setStats(data.stats);
-      } catch {
-        setError("Erreur réseau (stats).");
+        const data = await loadAdmin<{ stats?: Stats; error?: string }>(
+          ADMIN_STATS.key,
+          ADMIN_STATS.url,
+        );
+        if (cancelled) return;
+        setStats(data.stats ?? null);
+        setError("");
+      } catch (e) {
+        if (cancelled) return;
+        setError(e instanceof Error ? e.message : "Erreur réseau (stats).");
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   return (
@@ -71,52 +91,86 @@ export default function AdminHomePage() {
         </div>
       </section>
 
-      <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-        <Link
-          href="/admin/import"
-          className="rounded-2xl border border-[var(--line)] bg-[var(--bg-card)] p-5 transition hover:border-[var(--brand)]"
-        >
-          <p className="font-semibold">Importation</p>
-          <p className="mt-1 text-sm text-[var(--muted)]">
-            CSV → feuille nommée comme la filière (ex. FBA, GI).
+      {refreshing && stats ? (
+        <p className="mb-3 text-xs text-[var(--muted)]">Mise à jour…</p>
+      ) : null}
+
+      <div className="mb-6 grid gap-4 lg:grid-cols-3">
+        <section className="rounded-2xl border border-[var(--line)] bg-[var(--bg-card)] p-4">
+          <p className="text-[10px] font-semibold tracking-[0.14em] text-[var(--muted)] uppercase">
+            Suivi
           </p>
-        </Link>
-        <Link
-          href="/admin/agents"
-          className="rounded-2xl border border-[var(--line)] bg-[var(--bg-card)] p-5 transition hover:border-[var(--brand)]"
-        >
-          <p className="font-semibold">Agents</p>
-          <p className="mt-1 text-sm text-[var(--muted)]">
-            Ajouter des noms et mots de passe.
+          <div className="mt-3 grid gap-2">
+            <Link
+              href="/admin/confirmations"
+              className="rounded-xl border border-[var(--line)] bg-white px-4 py-3 transition hover:border-[var(--brand)]"
+            >
+              <p className="font-semibold">Confirmations</p>
+              <p className="mt-0.5 text-sm text-[var(--muted)]">
+                Journal, tri, export.
+              </p>
+            </Link>
+            <Link
+              href="/admin/table"
+              className="rounded-xl border border-[var(--line)] bg-white px-4 py-3 transition hover:border-[var(--brand)]"
+            >
+              <p className="font-semibold">Table</p>
+              <p className="mt-0.5 text-sm text-[var(--muted)]">
+                Stats par filière et par agent.
+              </p>
+            </Link>
+          </div>
+        </section>
+        <section className="rounded-2xl border border-[var(--line)] bg-[var(--bg-card)] p-4">
+          <p className="text-[10px] font-semibold tracking-[0.14em] text-[var(--muted)] uppercase">
+            Listes
           </p>
-        </Link>
-        <Link
-          href="/admin/confirmations"
-          className="rounded-2xl border border-[var(--line)] bg-[var(--bg-card)] p-5 transition hover:border-[var(--brand)]"
-        >
-          <p className="font-semibold">Confirmations</p>
-          <p className="mt-1 text-sm text-[var(--muted)]">
-            Dernières inscriptions confirmées.
+          <div className="mt-3 grid gap-2">
+            <Link
+              href="/admin/final"
+              className="rounded-xl border border-[var(--line)] bg-white px-4 py-3 transition hover:border-[var(--brand)]"
+            >
+              <p className="font-semibold">Final</p>
+              <p className="mt-0.5 text-sm text-[var(--muted)]">
+                Places, listes 1 à 5, hors délai.
+              </p>
+            </Link>
+            <Link
+              href="/admin/export"
+              className="rounded-xl border border-[var(--line)] bg-white px-4 py-3 transition hover:border-[var(--brand)]"
+            >
+              <p className="font-semibold">Export</p>
+              <p className="mt-0.5 text-sm text-[var(--muted)]">
+                Excel local et PDF de publication.
+              </p>
+            </Link>
+          </div>
+        </section>
+        <section className="rounded-2xl border border-[var(--line)] bg-[var(--bg-card)] p-4">
+          <p className="text-[10px] font-semibold tracking-[0.14em] text-[var(--muted)] uppercase">
+            Réglages
           </p>
-        </Link>
-        <Link
-          href="/admin/table"
-          className="rounded-2xl border border-[var(--line)] bg-[var(--bg-card)] p-5 transition hover:border-[var(--brand)]"
-        >
-          <p className="font-semibold">Table</p>
-          <p className="mt-1 text-sm text-[var(--muted)]">
-            Stats et graphiques par filière / agent.
-          </p>
-        </Link>
-        <Link
-          href="/admin/final"
-          className="rounded-2xl border border-[var(--line)] bg-[var(--bg-card)] p-5 transition hover:border-[var(--brand)]"
-        >
-          <p className="font-semibold">Final</p>
-          <p className="mt-1 text-sm text-[var(--muted)]">
-            Places par filière → export top scores.
-          </p>
-        </Link>
+          <div className="mt-3 grid gap-2">
+            <Link
+              href="/admin/import"
+              className="rounded-xl border border-[var(--line)] bg-white px-4 py-3 transition hover:border-[var(--brand)]"
+            >
+              <p className="font-semibold">Importation</p>
+              <p className="mt-0.5 text-sm text-[var(--muted)]">
+                CSV vers la feuille de la filière.
+              </p>
+            </Link>
+            <Link
+              href="/admin/agents"
+              className="rounded-xl border border-[var(--line)] bg-white px-4 py-3 transition hover:border-[var(--brand)]"
+            >
+              <p className="font-semibold">Agents</p>
+              <p className="mt-0.5 text-sm text-[var(--muted)]">
+                Noms et mots de passe.
+              </p>
+            </Link>
+          </div>
+        </section>
       </div>
 
       {stats && Object.keys(stats.parFiliere).length > 0 ? (
